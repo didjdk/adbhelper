@@ -1,5 +1,7 @@
 package com.rel.adbhelper.core.adb
 
+import kotlinx.coroutines.awaitCancellation
+
 /** Test fixture: an in-memory [AdbTransport] that scripts a shell response (or a failure to open/read). */
 class FakeAdbTransport(
     private val scriptedOutput: String = "",
@@ -11,6 +13,8 @@ class FakeAdbTransport(
     private val serviceOutputs: Map<String, ByteArray> = emptyMap(),
     /** How many bytes each [AdbStream.readChunk] call returns (test streaming behavior). */
     private val chunkSize: Int = Int.MAX_VALUE,
+    /** Never returns from [open] — simulates an unresponsive/unreachable target. */
+    private val hangOnOpen: Boolean = false,
 ) : AdbTransport {
 
     /** Bytes written to each service, for asserting push behavior. */
@@ -18,6 +22,7 @@ class FakeAdbTransport(
     val closedServices = mutableSetOf<String>()
 
     override suspend fun open(service: String): AdbStream {
+        if (hangOnOpen) awaitCancellation()
         throwOnOpen?.let { throw it }
         serviceOutputs[service]?.let { bytes ->
             return InMemoryAdbStream(

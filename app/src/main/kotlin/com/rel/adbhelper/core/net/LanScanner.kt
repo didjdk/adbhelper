@@ -28,9 +28,13 @@ object LanScanner {
         return (1..254).map { "$base.$it" }
     }
 
+    /** "host:port" — the same address format [com.rel.adbhelper.connect.parseHostPort] expects,
+     * so a scan result can be connected to directly without a separate formatting step. */
+    fun formatTarget(host: String, port: Int): String = "$host:$port"
+
     suspend fun scan(ip: String, prefix: Int, port: Int = ADB_PORT): List<String> = withContext(Dispatchers.IO) {
         subnetHosts(ip, prefix)
-            .map { host -> async { if (probe(host, port)) host else null } }
+            .map { host -> async { if (probe(host, port)) formatTarget(host, port) else null } }
             .awaitAll()
             .filterNotNull()
     }

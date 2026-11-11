@@ -23,4 +23,9 @@ class LanScannerTest {
         assertEquals(254, hosts.size)
         assertEquals("192.168.44.1", hosts.first())
     }
+
+    @Test
+    fun `formatTarget produces a host colon port string parseHostPort accepts`() {
+        assertEquals("10.0.2.15:5555", LanScanner.formatTarget("10.0.2.15", 5555))
+    }
 }

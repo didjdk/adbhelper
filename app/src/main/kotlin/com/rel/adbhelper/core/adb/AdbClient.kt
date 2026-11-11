@@ -1,6 +1,8 @@
 package com.rel.adbhelper.core.adb
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import java.io.IOException
 
 /**
@@ -12,10 +14,18 @@ import java.io.IOException
 private const val EXIT_CODE_MARKER = "__ADBHELPER_EXIT__:"
 private val EXIT_CODE_LINE = Regex("$EXIT_CODE_MARKER(\\d+)\\s*\$")
 
+/** Every one-shot call below is bounded by this — without it, an unresponsive or unreachable
+ * target leaves the calling screen on "Loading…"/stuck forever instead of surfacing a failure.
+ * [openService] is deliberately excluded: it hands back a long-lived stream (terminal, mirror)
+ * whose whole point is to stay open past any such window. */
+private const val COMMAND_TIMEOUT_MILLIS = 15_000L
+
 class AdbClient(private val transport: AdbTransport) {
 
     suspend fun shell(command: String): AdbResult = try {
-        runShell(command)
+        withTimeout(COMMAND_TIMEOUT_MILLIS) { runShell(command) }
+    } catch (c: TimeoutCancellationException) {
+        AdbResult.TransportUnreachable(c)
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
@@ -23,17 +33,22 @@ class AdbClient(private val transport: AdbTransport) {
     }
 
     /** Opens a long-lived service stream (e.g. `"shell:"` for a terminal, `"localabstract:<socket>"`
-     * for mirroring). The caller owns the stream's lifecycle. */
+     * for mirroring). The caller owns the stream's lifecycle — not time-bounded, see
+     * [COMMAND_TIMEOUT_MILLIS]'s doc. */
     suspend fun openService(service: String): AdbStream = transport.open(service)
 
     /** Reads a raw service's full byte output — no shell exit-marker framing. */
     suspend fun raw(service: String): ByteArray = try {
-        val stream = transport.open(service)
-        try {
-            stream.readAll()
-        } finally {
-            stream.close()
+        withTimeout(COMMAND_TIMEOUT_MILLIS) {
+            val stream = transport.open(service)
+            try {
+                stream.readAll()
+            } finally {
+                stream.close()
+            }
         }
+    } catch (c: TimeoutCancellationException) {
+        throw IOException("timed out reading from $service", c)
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
@@ -41,15 +56,23 @@ class AdbClient(private val transport: AdbTransport) {
     }
 
     /** Streams [data] onto the target's [path] via `exec:cat >`. */
-    suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024): Unit {
-        val stream = transport.open("exec:cat > '$path'")
-        try {
-            data.toList().chunked(chunkSize).forEach { chunk ->
-                stream.write(chunk.toByteArray())
+    suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024): Unit = try {
+        withTimeout(COMMAND_TIMEOUT_MILLIS) {
+            val stream = transport.open("exec:cat > '$path'")
+            try {
+                data.toList().chunked(chunkSize).forEach { chunk ->
+                    stream.write(chunk.toByteArray())
+                }
+            } finally {
+                stream.close()
             }
-        } finally {
-            stream.close()
         }
+    } catch (c: TimeoutCancellationException) {
+        throw IOException("timed out writing to $path", c)
+    } catch (c: CancellationException) {
+        throw c
+    } catch (t: Throwable) {
+        throw IOException("failed to write to $path", t)
     }
 
     /** Reads a file off the target via `exec:cat`. */

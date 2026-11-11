@@ -54,6 +54,25 @@ class AdbClientTest {
     }
 
     @Test
+    fun `shell times out against an unresponsive transport rather than hanging forever`() = runTest {
+        val transport = FakeAdbTransport(hangOnOpen = true)
+        val result = AdbClient(transport).shell("echo hi")
+        assertTrue(result is AdbResult.TransportUnreachable)
+    }
+
+    @Test
+    fun `raw times out against an unresponsive transport rather than hanging forever`() = runTest {
+        val transport = FakeAdbTransport(hangOnOpen = true)
+        var threwIOException = false
+        try {
+            AdbClient(transport).raw("exec:screencap -p")
+        } catch (e: IOException) {
+            threwIOException = true
+        }
+        assertTrue(threwIOException)
+    }
+
+    @Test
     fun `raw returns the stream bytes verbatim without any exit-marker framing`() = runTest {
         val payload = byteArrayOf(0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte(), 0x00.toByte(), 0x0A.toByte())
         val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:screencap -p" to payload))
