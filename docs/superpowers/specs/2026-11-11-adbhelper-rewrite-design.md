@@ -124,6 +124,33 @@ response parsing) are plain functions under unit test, isolated from the parts t
   encode/decode, device-info text parsers, file-listing parsers). No live-device integration
   test suite in v1 — out of reach in this environment; noted as a gap, not silently skipped.
 
+## Visual identity
+
+Not a copy of the original's ladybug mascot or its busy multi-color toolbar (pink/purple/teal/
+blue icons at once) — our own distinct identity, designed against the frontend-design skill's
+anti-cliché checklist:
+
+- **Palette**: dark-indigo structure (`#10131C` deep space / `#2A3356` indigo surfaces) with a
+  single signal-cyan accent (`#27E1C1`) used only for interactive/active elements; a light theme
+  mirrors the same roles with a cool paper background (`#F2F4F8`, not cream) and a teal primary.
+  Deliberately not the cream+terracotta or near-black+acid-green defaults the skill warns about.
+- **Type**: system default sans for UI chrome; **monospace reserved specifically for real device
+  data** (the host:port field, screenshot directory path, and — later — serials/command output),
+  never used decoratively. One amber tertiary color for caution/destructive actions.
+- **Mark**: `ui/components/SignalMark` — a center dot with two radiating rings (a device being
+  pinged/found), not an illustrated mascot — matches the app's actual job without borrowing the
+  original's branding.
+- **Layout pattern**: kept the original's effective ideas (centered mark on Connect, grouped
+  settings-list-with-leading-icons) but re-themed to our own single-accent discipline instead of
+  copying its exact colors.
+
+## CI
+
+`.github/workflows/build.yml` (push/PR: build + run unit tests + sign debug APK with `signapp`,
+upload as artifact) and `release.yml` (on a `v*` tag: build + sign a release APK, publish as a
+GitHub release), both modeled directly on `mon231/vidspy`'s workflows. `versionName`/
+`versionCode` are overridable via Gradle properties for the release build.
+
 ## Feature spec (what ships, screen by screen)
 
 ### 1. Connect screen (launcher)
@@ -222,23 +249,28 @@ response parsing) are plain functions under unit test, isolated from the parts t
 No Gradle project exists yet — this is a from-scratch repo, so the first several commits are
 scaffolding, not features. Suggested order, each step a small reviewable commit:
 
-1. Gradle project skeleton (`:app`, Compose + Material 3 wired, empty single Activity, no
+1. ✅ Gradle project skeleton (`:app`, Compose + Material 3 wired, empty single Activity, no
    feature code yet).
-2. `core/process` (a testable `ProcessRunner` abstraction over `ProcessBuilder`, used for the
+2. ✅ `core/process` (a testable `ProcessRunner` abstraction over `ProcessBuilder`, used for the
    genuine `adb pair` and `fastboot` binary calls) + `core/adb`'s command layer wired to the ADB
    library, against a fake transport for unit tests — the part with the most pure, testable
    logic and no dependency on anything else existing yet.
-3. `NetworkAdbTransport` (library's socket transport) + the Connect screen's network path (TCP
-   connect + pairing via the bundled `adb` binary) — the one path actually exercisable against
-   the dev emulator.
-4. Settings + About/Feedback (simplest screens, good smoke test of navigation + DataStore).
-5. Device info, then app manager, then file manager, then shell (each adds commands to
-   `core/adb` but no new architecture).
-6. `UsbOtgAdbTransport` (the library's USB transport wired to our `AdbTransport` interface) —
-   tackle once the command layer above it is stable, so it only has to prove the wiring.
-7. Reboot/DPI, process manager (small, same pattern as step 5).
-8. Remote control / mirroring last — it's the biggest, least testable module; build it against
-   an already-stable `AdbClient` so any bugs found are isolated to the mirroring code itself.
+3. ✅ `NetworkAdbTransport` (library's socket transport) + the Connect screen's network path (TCP
+   connect + pairing) — the one path actually exercisable against the dev emulator.
+4. ✅ Settings + About/Feedback (simplest screens, good smoke test of navigation + DataStore).
+   CI and the visual identity pass also landed around here.
+5. ⬜ Device info, then LAN device discovery + pairing UI, then app manager, then file manager,
+   then shell (each adds commands to `core/adb` but no new architecture) — **not started**.
+6. ⬜ `UsbOtgAdbTransport` (the library's USB transport wired to our `AdbTransport` interface) —
+   tackle once the command layer above it is stable, so it only has to prove the wiring —
+   **not started**.
+7. ⬜ Screenshot, reboot/DPI, process manager (small, same pattern as step 5) — **not started**.
+8. ⬜ Remote control / mirroring last — it's the biggest, least testable module; build it against
+   an already-stable `AdbClient` so any bugs found are isolated to the mirroring code itself —
+   **not started**.
+
+Steps 5–8 are each their own implementation plan, same weight as the plan that built 1–4 — not
+something to batch into a single pass.
 
 ## Left to the builder
 
