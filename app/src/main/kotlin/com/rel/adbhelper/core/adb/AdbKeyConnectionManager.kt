@@ -54,8 +54,16 @@ class AdbKeyConnectionManager private constructor(
      * Connects to [host]:[port], reconnecting first if already connected to a different target.
      * Reusing an existing connection to the wrong target would make every later command run
      * against the wrong device.
+     *
+     * Not `@Synchronized`: the library's own `connect`/`openStream`/`disconnect` already
+     * serialize on their own internal lock, so an outer lock here would be redundant — and
+     * worse, it would be a second place a thread can get stuck forever. A target that accepts
+     * the raw TCP connection but never completes the ADB handshake can block the underlying
+     * (library-internal, blocking, no-timeout) `java.net.Socket` connect indefinitely; that is
+     * not a suspension point, so none of our `withTimeout` wrappers elsewhere can cancel it, and
+     * the only way out is killing the process. Known, accepted limitation of this transport —
+     * not something this app's own code can route around without forking the library.
      */
-    @Synchronized
     fun connectTo(host: String, port: Int): Boolean {
         if (isConnected && hostAddress == host && connectedPort == port) return true
         if (isConnected) disconnect()
