@@ -12,8 +12,9 @@ android {
         applicationId = "com.rel.adbhelper"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Overridable from CI: ./gradlew assembleRelease -PversionName=1.2.3 -PversionCode=45
+        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 1
+        versionName = project.findProperty("versionName") as String? ?: "1.0"
     }
 
     buildTypes {

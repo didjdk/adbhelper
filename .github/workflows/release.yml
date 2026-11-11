@@ -1,0 +1,61 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build unsigned release APK
+        run: >
+          bash ./gradlew assembleRelease
+          -PversionName=${GITHUB_REF_NAME#v}
+          -PversionCode=${{ github.run_number }}
+
+      - name: Sign APK with signapp
+        run: |
+          pip install signapp
+          # signapp shells out to zipalign and apksigner: use the runner's SDK build-tools
+          export PATH="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1):$PATH"
+          mkdir -p ~/.reltools
+          unsigned=$(ls app/build/outputs/apk/release/*.apk)
+          # no -k: signapp signs with its built-in keystore
+          signapp -a "$unsigned" -o "adbhelper-${GITHUB_REF_NAME}.apk"
+          apksigner verify --verbose "adbhelper-${GITHUB_REF_NAME}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adbhelper-apk
+          path: adbhelper-*.apk
+          if-no-files-found: error
+
+  release:
+    needs: [android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" assets/*
+          --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
