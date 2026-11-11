@@ -29,10 +29,15 @@ import java.util.concurrent.TimeUnit
  * exactly this "build a self-signed cert" task.
  */
 class AdbKeyConnectionManager private constructor(
-    context: Context,
     private val privateKey: PrivateKey,
     private val certificate: Certificate,
 ) : AbsAdbConnectionManager() {
+
+    /** The port of the target [connectTo] last succeeded against, if any — the library tracks
+     * the connected host itself (`hostAddress`) but not the port, so we track both here to
+     * detect "connected, but to a different target" and reconnect instead of reusing the
+     * existing connection silently. */
+    private var connectedPort: Int? = null
 
     init {
         setApi(Build.VERSION.SDK_INT)
@@ -45,6 +50,20 @@ class AdbKeyConnectionManager private constructor(
     override fun getCertificate(): Certificate = certificate
     override fun getDeviceName(): String = "ADB Helper"
 
+    /**
+     * Connects to [host]:[port], reconnecting first if already connected to a different target.
+     * Reusing an existing connection to the wrong target would make every later command run
+     * against the wrong device.
+     */
+    @Synchronized
+    fun connectTo(host: String, port: Int): Boolean {
+        if (isConnected && hostAddress == host && connectedPort == port) return true
+        if (isConnected) disconnect()
+        val connected = connect(host, port)
+        connectedPort = if (connected) port else null
+        return connected
+    }
+
     companion object {
         @Volatile
         private var instance: AdbKeyConnectionManager? = null
@@ -56,7 +75,7 @@ class AdbKeyConnectionManager private constructor(
 
         private fun create(context: Context): AdbKeyConnectionManager {
             val (privateKey, certificate) = loadOrGenerateKeyPair(context)
-            return AdbKeyConnectionManager(context, privateKey, certificate)
+            return AdbKeyConnectionManager(privateKey, certificate)
         }
 
         private fun loadOrGenerateKeyPair(context: Context): Pair<PrivateKey, Certificate> {

@@ -45,16 +45,13 @@ fun ConnectScreen(
     ) {
         OutlinedTextField(
             value = hostPortText,
-            onValueChange = {
-                hostPortText = it
-                viewModel.onHostPortChanged(it)
-            },
+            onValueChange = { hostPortText = it },
             label = { Text("Device address (host:port)") },
             modifier = Modifier.fillMaxWidth(),
         )
         Button(
-            onClick = viewModel::onConnectClicked,
-            enabled = hostPortText.isNotBlank() && state !is ConnectUiState.Connecting,
+            onClick = { viewModel.onConnectClicked(hostPortText) },
+            enabled = parseHostPort(hostPortText) != null && state !is ConnectUiState.Connecting,
         ) {
             Text("Connect")
         }

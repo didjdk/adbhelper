@@ -3,12 +3,15 @@ package com.rel.adbhelper.core.adb
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 /**
  * [AdbTransport] over a TCP connection to `host:port`, via the real ADB protocol client
  * library (`io.github.muntashirakon:libadb-android`). The library's connection manager is a
  * singleton with one active connection at a time; this transport connects it to [host]:[port]
- * on first use if it isn't already connected to that same target.
+ * on every open, reconnecting first if the manager is currently on a different target (see
+ * [AdbKeyConnectionManager.connectTo]) — reusing a connection to the wrong device would route
+ * later commands (install, uninstall, reboot, ...) to the wrong target.
  */
 class NetworkAdbTransport(
     private val context: Context,
@@ -19,13 +22,10 @@ class NetworkAdbTransport(
     private val manager get() = AdbKeyConnectionManager.getInstance(context)
 
     override suspend fun open(service: String): AdbStream = withContext(Dispatchers.IO) {
-        ensureConnected()
+        if (!manager.connectTo(host, port)) {
+            throw IOException("Connection to $host:$port was rejected or could not be established")
+        }
         LibraryAdbStream(manager.openStream(service))
-    }
-
-    private fun ensureConnected() {
-        if (manager.isConnected) return
-        manager.connect(host, port)
     }
 }
 
