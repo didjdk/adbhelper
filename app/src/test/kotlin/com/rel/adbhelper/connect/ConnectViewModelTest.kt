@@ -1,6 +1,7 @@
 package com.rel.adbhelper.connect
 
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.COMMAND_TIMEOUT_MILLIS
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
@@ -16,6 +17,21 @@ import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectViewModelTest {
+
+    @Test
+    fun `CONNECT_TIMEOUT_MILLIS stays strictly above AdbClient's own read-write timeout`() {
+        // Live-reproduced bug this guards against: CONNECT_TIMEOUT_MILLIS used to be 10s,
+        // shorter than AdbClient's internal 15s read/write watchdog. The outer timeout always
+        // fired first and cancelled AdbClient's own watchdog before it ever got to close a
+        // genuinely stuck stream — the UI sat on "Connecting…" forever instead of the "Connection
+        // timed out" this timeout exists to guarantee. See CONNECT_TIMEOUT_MILLIS's own doc.
+        assertTrue(
+            CONNECT_TIMEOUT_MILLIS > COMMAND_TIMEOUT_MILLIS,
+            "CONNECT_TIMEOUT_MILLIS ($CONNECT_TIMEOUT_MILLIS) must stay strictly greater than " +
+                "COMMAND_TIMEOUT_MILLIS ($COMMAND_TIMEOUT_MILLIS), or it races and silently " +
+                "defeats AdbClient's own read/write watchdog",
+        )
+    }
 
     @Test
     fun `connect click with blank input leaves state Idle and does not invoke connect`() = runTest {

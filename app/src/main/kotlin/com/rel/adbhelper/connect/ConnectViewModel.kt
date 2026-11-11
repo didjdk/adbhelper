@@ -1,6 +1,7 @@
 package com.rel.adbhelper.connect
 
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.COMMAND_TIMEOUT_MILLIS
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -10,9 +11,24 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeout
 
-/** How long a single connect attempt is given before it's reported as failed, rather than
- * leaving the UI on "Connecting…" indefinitely against an unreachable host. */
-const val CONNECT_TIMEOUT_MILLIS = 10_000L
+/**
+ * How long a single connect attempt is given before it's reported as failed, rather than
+ * leaving the UI on "Connecting…" indefinitely against an unreachable host.
+ *
+ * Live-reproduced bug this value fixes: it used to be 10s, shorter than [AdbClient][
+ * com.rel.adbhelper.core.adb.AdbClient]'s own internal 15s read/write watchdog
+ * ([COMMAND_TIMEOUT_MILLIS]). That meant THIS timeout always fired first and cancelled the whole
+ * `connect(...)` call tree — including AdbClient's own watchdog coroutine — before that watchdog
+ * ever got to run its `delay` out and close the stuck stream. The watchdog never fired, nothing
+ * was ever left to unblock the real stuck read, and the UI sat on "Connecting…" forever instead
+ * of the "Connection timed out" this timeout was supposed to guarantee. Must stay strictly
+ * greater than [COMMAND_TIMEOUT_MILLIS] (with margin) so AdbClient's own bound always resolves
+ * the call — successfully or not — before this one would ever need to step in; the real
+ * backstop this timeout exists for is [AdbKeyConnectionManager.connectTo][
+ * com.rel.adbhelper.core.adb.AdbKeyConnectionManager.connectTo]'s own documented, unfixable
+ * limitation (no stream yet to close), not AdbClient's read/write path.
+ */
+const val CONNECT_TIMEOUT_MILLIS = COMMAND_TIMEOUT_MILLIS + 10_000L
 
 /**
  * Drives the Connect screen's network path. [connect] is a function rather than a concrete

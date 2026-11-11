@@ -23,8 +23,16 @@ private val EXIT_CODE_LINE = Regex("$EXIT_CODE_MARKER(\\d+)\\s*\$")
 /** Every one-shot call below is bounded by this — without it, an unresponsive or unreachable
  * target leaves the calling screen on "Loading…"/stuck forever instead of surfacing a failure.
  * [AdbClient.openService] is deliberately excluded: it hands back a long-lived stream (terminal,
- * mirror) whose whole point is to stay open past any such window. */
-private const val COMMAND_TIMEOUT_MILLIS = 15_000L
+ * mirror) whose whole point is to stay open past any such window.
+ *
+ * Public so callers that wrap an [AdbClient] call in their own outer timeout can see this value
+ * and stay strictly above it — see [timingOutOnClose]'s doc on why an outer timeout shorter than
+ * (or equal to) this one silently defeats the watchdog below instead of just adding a second,
+ * redundant bound. [AdbClient]'s own `commandTimeoutMillis` constructor param can also be set
+ * below this default instead, which keeps the same invariant without needing an outer wrapper at
+ * all — prefer that over adding a shorter outer `withTimeout`.
+ */
+const val COMMAND_TIMEOUT_MILLIS = 15_000L
 
 /**
  * The library's stream reads/writes are raw blocking socket I/O with no timeout of their own —

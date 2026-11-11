@@ -35,9 +35,9 @@ import com.rel.adbhelper.core.net.LanScanner
 import com.rel.adbhelper.core.recents.RecentConnections
 import com.rel.adbhelper.core.session.DeviceSession
 import com.rel.adbhelper.ui.components.SignalMark
+import com.rel.adbhelper.core.adb.COMMAND_TIMEOUT_MILLIS
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 
 /** How long a scan result's real-ADB-handshake verification is given, per candidate, before
@@ -276,13 +276,21 @@ private fun PairDialog(onDismiss: () -> Unit) {
  * call site in [ConnectScreen]'s Scan handler for why a raw port-open check isn't enough on its
  * own. Uses its own disposable connection (not the app's shared singleton) specifically so
  * [SCAN_VERIFY_CONCURRENCY] of these can run at the same time without one candidate's probe
- * reconnecting the single shared connection out from under another's. */
+ * reconnecting the single shared connection out from under another's.
+ *
+ * The bound is passed straight into [AdbClient] as its own `commandTimeoutMillis`, not wrapped
+ * around it as a separate outer `withTimeout` — a shorter outer timeout races AdbClient's
+ * internal read/write watchdog (see [COMMAND_TIMEOUT_MILLIS]'s doc) and, if it wins, cancels
+ * that watchdog before it ever closes the stuck stream: the probe returns `false` promptly, but
+ * leaks a thread permanently blocked in the real socket read behind it, once per bad candidate.
+ */
 private suspend fun canReallyAdbConnect(context: android.content.Context, host: String, port: Int): Boolean {
     val manager = AdbKeyConnectionManager.createDisposable(context)
     return try {
-        withTimeoutOrNull(SCAN_VERIFY_TIMEOUT_MILLIS) {
-            AdbClient(NetworkAdbTransport(context, host, port, manager)).shell("echo 1") is AdbResult.Success
-        } ?: false
+        AdbClient(
+            NetworkAdbTransport(context, host, port, manager),
+            commandTimeoutMillis = SCAN_VERIFY_TIMEOUT_MILLIS,
+        ).shell("echo 1") is AdbResult.Success
     } finally {
         runCatching { manager.disconnect() }
     }
