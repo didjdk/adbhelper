@@ -54,6 +54,7 @@ const val COMMAND_TIMEOUT_MILLIS = 15_000L
 private suspend fun <T> AdbStream.timingOutOnClose(
     timeoutMillis: Long,
     watchdogDispatcher: CoroutineDispatcher,
+    onTimeout: () -> Unit,
     block: suspend AdbStream.() -> T,
 ): T = coroutineScope {
     val work = async { block() }
@@ -67,6 +68,13 @@ private suspend fun <T> AdbStream.timingOutOnClose(
     // participates in the test's virtual time instead of racing real wall-clock time.
     val watchdog = launch(watchdogDispatcher) {
         delay(timeoutMillis)
+        // A stream forced closed this way means something was genuinely stuck mid-protocol, not
+        // just slow — onTimeout flags the shared connection as suspect (see
+        // AdbTransport.invalidate's doc) *before* closing, so the next caller reconnects instead
+        // of silently reusing a connection this close() may have left broken. Live-reproduced:
+        // without this, one timed-out command left every later one-shot call in the same
+        // session failing silently against the same now-dead connection.
+        onTimeout()
         close()
     }
     try {
@@ -101,7 +109,7 @@ class AdbClient(
     suspend fun raw(service: String): ByteArray = try {
         val stream = openWithTimeout(service)
         try {
-            stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher) { readAll() }
+            stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) { readAll() }
         } finally {
             stream.close()
         }
@@ -122,7 +130,9 @@ class AdbClient(
         val stream = openWithTimeout("exec:cat > '$path'")
         try {
             data.toList().chunked(chunkSize).forEach { chunk ->
-                stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher) { write(chunk.toByteArray()) }
+                stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
+                    write(chunk.toByteArray())
+                }
             }
         } finally {
             stream.close()
@@ -143,7 +153,9 @@ class AdbClient(
             val stream = openWithTimeout("exec:cat '$path'")
             try {
                 while (true) {
-                    val chunk = stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher) { readChunk() } ?: break
+                    val chunk = stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
+                        readChunk()
+                    } ?: break
                     sink(chunk)
                 }
             } finally {
@@ -178,7 +190,10 @@ class AdbClient(
     private suspend fun runShell(command: String): AdbResult {
         val stream = openWithTimeout("shell:$command; echo $EXIT_CODE_MARKER\$?")
         try {
-            val text = String(stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher) { readAll() }, Charsets.UTF_8)
+            val text = String(
+                stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) { readAll() },
+                Charsets.UTF_8,
+            )
             val match = EXIT_CODE_LINE.find(text)
                 ?: return AdbResult.CommandFailed("remote shell closed without an exit status")
             val exitCode = match.groupValues[1].toInt()

@@ -8,6 +8,18 @@ package com.rel.adbhelper.core.adb
  */
 interface AdbTransport {
     suspend fun open(service: String): AdbStream
+
+    /**
+     * Tells this transport its underlying connection may be unhealthy and should not be trusted
+     * as-is next time — called when a caller had to force-close a stuck stream (see
+     * [AdbKeyConnectionManager]'s doc on why a watchdog-closed stream is not proof the whole
+     * shared connection is still fine). Live-reproduced: one command that genuinely timed out
+     * left the connection silently broken for every later one-shot call in the same session
+     * (screenshot, app list, device info all failing afterward) because nothing told the next
+     * [open] to reconnect instead of reusing it. Default no-op for transports with no shared,
+     * reusable connection to poison in the first place.
+     */
+    fun invalidate() {}
 }
 
 interface AdbStream {

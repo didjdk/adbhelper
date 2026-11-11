@@ -77,13 +77,33 @@ class AdbKeyConnectionManager private constructor(
         streamOpenMutex.withLock { openStream(service) }
 
     /**
+     * Set when [AdbClient][com.rel.adbhelper.core.adb.AdbClient]'s read/write watchdog had to
+     * force-close a stuck stream. The library's `isConnected` only reflects whether the
+     * underlying socket is still open, not whether the multiplexed ADB session riding on it is
+     * still in a sane state — a stream that had to be killed mid-read can leave that session
+     * broken while the socket itself stays technically "connected". Live-reproduced: after one
+     * command timed out and got force-closed this way, every later one-shot call in the same
+     * session (screenshot, app list, device info) kept silently reusing the same now-broken
+     * connection and failing, because nothing ever told [connectTo] to stop trusting it. Checked
+     * and cleared under [connectGate]'s own lock, not a bare flag read, so a poison set mid-connect
+     * can't race a fresh [connect] that's already in flight.
+     */
+    @Volatile
+    private var poisoned = false
+
+    fun markPoisoned() {
+        poisoned = true
+    }
+
+    /**
      * Connects to [host]:[port], reconnecting first if already connected to a different target.
      * Reusing an existing connection to the wrong target would make every later command run
-     * against the wrong device.
+     * against the wrong device. Also reconnects if [poisoned] — see its doc.
      */
     suspend fun connectTo(host: String, port: Int): Boolean = connectGate.ensureConnected(
-        alreadyConnected = { isConnected && hostAddress == host && connectedPort == port },
+        alreadyConnected = { !poisoned && isConnected && hostAddress == host && connectedPort == port },
         connect = {
+            poisoned = false
             if (isConnected) disconnect()
             val connected = connect(host, port)
             connectedPort = if (connected) port else null

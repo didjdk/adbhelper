@@ -137,6 +137,7 @@ class AdbClientTest {
         org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(5)) {
             val latch = java.util.concurrent.CountDownLatch(1)
             var closeCalled = false
+            var invalidateCalled = false
             val transport = object : AdbTransport {
                 override suspend fun open(service: String): AdbStream = object : AdbStream {
                     override suspend fun write(data: ByteArray) {}
@@ -151,12 +152,21 @@ class AdbClientTest {
                         latch.countDown()
                     }
                 }
+                override fun invalidate() {
+                    invalidateCalled = true
+                }
             }
             val result = kotlinx.coroutines.runBlocking {
                 AdbClient(transport, commandTimeoutMillis = 300).shell("echo hi")
             }
             assertTrue(closeCalled, "expected the watchdog to close the stuck stream")
             assertTrue(result is AdbResult.CommandFailed, "expected the unblocked (empty) read to parse as a failed command, not hang")
+            assertTrue(
+                invalidateCalled,
+                "expected the watchdog to invalidate the transport's connection, not just close this one " +
+                    "stream — live-reproduced: without this, every later call silently reused the same " +
+                    "now-broken connection and failed",
+            )
         }
     }
 

@@ -10,9 +10,6 @@ import com.rel.adbhelper.core.apps.parsePmList
 import com.rel.adbhelper.core.shell.shellQuote
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,17 +37,18 @@ class AppsViewModel(
         scope.launch {
             _state.value = _state.value.copy(loading = true)
             try {
-                // Three independent reads — run them concurrently so a slow/laggy link costs one
-                // round trip's wait instead of three stacked on top of each other.
-                val (thirdPartyRaw, systemRaw, disabledRaw) = coroutineScope {
-                    val thirdParty = async { client.shell("pm list packages -3").success().orEmpty() }
-                    val system = async { client.shell("pm list packages -s").success().orEmpty() }
-                    val disabled = async { client.shell("pm list packages -d").success().orEmpty() }
-                    awaitAll(thirdParty, system, disabled)
-                }
-                val thirdParty = parsePmList(thirdPartyRaw)
-                val system = parsePmList(systemRaw)
-                val disabled = parsePmList(disabledRaw).toSet()
+                // Sequential, not concurrent — live-reproduced: three shell() calls fired at once
+                // over this app's one shared multiplexed connection intermittently force-closed
+                // the two larger reads (system/disabled, each listing 200+ packages) while the
+                // tiny third-party read finished first, surfacing as a silent empty app list (no
+                // error shown, since the failure was swallowed by .success().orEmpty()). Same
+                // underlying class of bug streamOpenMutex's doc already covers for concurrent
+                // opens — here it's concurrent reads racing on one connection instead. Each read
+                // is still individually fast; the cost of going sequential is one extra round
+                // trip, not three stacked full timeouts.
+                val thirdParty = parsePmList(client.shell("pm list packages -3").success().orEmpty())
+                val system = parsePmList(client.shell("pm list packages -s").success().orEmpty())
+                val disabled = parsePmList(client.shell("pm list packages -d").success().orEmpty()).toSet()
                 val apps = (thirdParty + system)
                     .map { AppEntry(pkg = it, isSystem = it !in thirdParty.toSet(), isEnabled = it !in disabled) }
                     .sortedBy { it.pkg }

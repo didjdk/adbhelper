@@ -23,6 +23,12 @@ class FakeAdbTransport(
     /** Bytes written to each service, for asserting push behavior. */
     val writtenByService = mutableMapOf<String, MutableList<ByteArray>>()
     val closedServices = mutableSetOf<String>()
+    var invalidateCallCount = 0
+        private set
+
+    override fun invalidate() {
+        invalidateCallCount++
+    }
 
     override suspend fun open(service: String): AdbStream {
         if (openDelayMillis > 0) kotlinx.coroutines.delay(openDelayMillis)

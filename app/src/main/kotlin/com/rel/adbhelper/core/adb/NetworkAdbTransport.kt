@@ -28,6 +28,8 @@ class NetworkAdbTransport(
         }
         LibraryAdbStream(manager.openStreamSerialized(service))
     }
+
+    override fun invalidate() = manager.markPoisoned()
 }
 
 private class LibraryAdbStream(private val delegate: io.github.muntashirakon.adb.AdbStream) : AdbStream {
