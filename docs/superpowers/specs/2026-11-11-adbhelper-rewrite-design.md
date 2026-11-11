@@ -59,13 +59,13 @@ response parsing) are plain functions under unit test, isolated from the parts t
   "Android 30") and `scrcpy_server` (an APK-packaged jar). We do **not** extract or ship these —
   we fetch our own copies at build/setup time from genuine upstream sources, recorded with their
   source URL and checksum next to a fetch script (`tools/fetch-binaries.*`):
-  - `adb` (pairing command only — see transport decision above) and `fastboot` (arm64-v8a +
-    armeabi-v7a, running ON the controlling device): AOSP's own build targets a desktop host,
-    not Android, so there's no official Google Android-target build. Source genuine prebuilt
-    Android-target binaries from a well-known existing distribution of the same AOSP code —
-    the Termux `android-tools` package is the standard one (genuine AOSP `platform/system/core`
-    source, already built for Android, widely used) — rather than cross-building ourselves.
-    Pin an exact package/version and checksum.
+  - `fastboot` only (arm64-v8a + armeabi-v7a, running ON the controlling device — `adb` itself
+    is no longer bundled at all, per the transport decision above). AOSP's own build targets a
+    desktop host, not Android, so there's no official Google Android-target build. Source a
+    genuine prebuilt Android-target binary from a well-known existing distribution of the same
+    AOSP code — the Termux `android-tools` package is the standard one (genuine AOSP
+    `platform/system/core` source, already built for Android, widely used) — rather than
+    cross-building ourselves. Pin an exact package/version and checksum.
   - `scrcpy-server.jar` from a tagged GitHub release of `Genymobile/scrcpy` (Apache-2.0/MIT).
     Pick the current stable release tag at implementation time and have the client's control
     protocol implementation (`core/mirror`) match *that* tag's documented wire format — don't
@@ -91,29 +91,28 @@ response parsing) are plain functions under unit test, isolated from the parts t
   repository/service type that owns the actual I/O, behind an interface so the ViewModel can be
   tested with a fake.
 - **Transport**: following the "use well-known libraries, implement the least logic possible"
-  instruction, the ADB wire protocol itself is not hand-rolled. We depend on an existing,
-  well-known, actively-referenced open-source Java ADB client library that implements the
-  protocol (`CNXN`/`AUTH`/`OPEN`/`WRTE`/`CLSE`/`OKAY` framing, the sync push/pull service, shell
-  streams) over both a raw socket and `UsbDeviceConnection` bulk transfer — e.g. `cgutman/AdbLib`
-  or an actively-maintained fork/successor of it (confirm current best-maintained option at
-  implementation time; the point is "use the library", not "use this exact GitHub repo"). This
-  removes essentially all custom protocol-framing code from our side:
-  - `NetworkAdbTransport` — the library's socket transport against `host:port`. No root.
-  - `UsbOtgAdbTransport` — the library's `UsbDeviceConnection` transport against a device picked
-    via Android's standard USB-permission dialog. No root.
+  instruction, the ADB wire protocol itself is not hand-rolled. We depend on
+  `io.github.muntashirakon:libadb-android` (JitPack), a real, actively-used open-source Java
+  ADB client library (used by the App Manager app, among others) implementing the protocol
+  (`CNXN`/`AUTH`/`OPEN`/`WRTE`/`CLSE`/`OKAY` framing, shell streams) over a TCP socket, and —
+  confirmed at Task 4 implementation time — the Android 11+ wireless-pairing handshake
+  natively (`AbsAdbConnectionManager.pair(host, port, code)`), so pairing does **not** need a
+  bundled `adb` binary after all, superseding this doc's earlier plan to shell out to one for
+  that single command. This removes essentially all custom protocol-framing code from our side:
+  - `NetworkAdbTransport` — the library's socket transport against `host:port`, via a singleton
+    `AbsAdbConnectionManager` subclass (`AdbKeyConnectionManager`) that owns this app's one RSA
+    key pair + self-signed certificate (generated with BouncyCastle `bcpkix-jdk18on`, not the
+    library's own sample code's `android.sun.security.x509.*` hidden APIs, which are non-SDK
+    interfaces at real risk of removal on current Android). No root.
+  - `UsbOtgAdbTransport` (later plan) — whether this same library's USB transport (unconfirmed
+    as of this writing — its network/pairing support is confirmed, its USB-OTG support is not)
+    covers the OTG path, or a second well-known library is needed for that specifically, is a
+    research item for that plan, not settled here.
   - Both expose the same small `AdbTransport` surface to our `AdbClient` command layer, so
     everything above this line is transport-agnostic and untouched by which one is active.
-  - **Wireless-debugging pairing** (Android 11+ `adb pair host:port <code>`) is a separate
-    SPAKE2/TLS handshake, not part of the core wire protocol, and typically isn't covered by
-    these USB-era client libraries. Reimplementing that crypto ourselves would be *more* custom
-    logic, not less — so pairing specifically shells out to a genuine, prebuilt `adb` binary
-    (sourced from a well-known existing Android-target build of AOSP's `adb`, e.g. the Termux
-    `android-tools` package — genuine AOSP source, already built for Android, widely used) via
-    `ProcessBuilder`, for that one command only. Everything else (connect, shell, push/pull,
-    install) goes through the library, not the binary.
   - Fastboot has no comparable well-known Android-hosted client library. We use a genuine
-    prebuilt `fastboot` binary (same source as above) via `ProcessBuilder` for the reboot-to-
-    bootloader flows, rather than writing a USB fastboot client ourselves.
+    prebuilt `fastboot` binary via `ProcessBuilder` for the reboot-to-bootloader flows, rather
+    than writing a USB fastboot client ourselves — see the binary-sourcing note below.
   - Root is a separate, unrelated axis: only the original's "activate app" shell-permission flow
     implies root, not transport. Detect root via a standard `su` probe (`which su` / attempt
     `su -c true`) exposed as a `RootAccess` capability check; when absent, the activate action
