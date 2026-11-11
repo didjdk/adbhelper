@@ -51,7 +51,11 @@ fun ConnectScreen(
         )
         Button(
             onClick = { viewModel.onConnectClicked(hostPortText) },
-            enabled = parseHostPort(hostPortText) != null && state !is ConnectUiState.Connecting,
+            // No Disconnect action exists yet, so once Connected there's nothing a re-click
+            // could do — matches onConnectClicked's own Idle/Failed-only guard.
+            enabled = parseHostPort(hostPortText) != null &&
+                state !is ConnectUiState.Connecting &&
+                state !is ConnectUiState.Connected,
         ) {
             Text("Connect")
         }
