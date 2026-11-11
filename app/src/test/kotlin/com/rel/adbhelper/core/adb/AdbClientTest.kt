@@ -99,6 +99,20 @@ class AdbClientTest {
     }
 
     @Test
+    fun `pullTo delivers the file in bounded chunks without ever holding it all at once`() = runTest {
+        val payload = ByteArray(10) { it.toByte() }
+        val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/big.bin'" to payload), chunkSize = 4)
+        val delivered = mutableListOf<ByteArray>()
+        var maxSeenAtOnce = 0
+        AdbClient(transport).pullTo("/sdcard/big.bin") { chunk ->
+            delivered += chunk
+            maxSeenAtOnce = maxOf(maxSeenAtOnce, chunk.size)
+        }
+        assertEquals(10, delivered.sumOf { it.size })
+        assertTrue(maxSeenAtOnce <= 4)
+    }
+
+    @Test
     fun `readChunk yields the stream in bounded chunks and then null`() = runTest {
         val payload = ByteArray(5) { it.toByte() }
         val transport = FakeAdbTransport(serviceOutputs = mapOf("s" to payload), chunkSize = 2)

@@ -55,17 +55,21 @@ class AdbClient(private val transport: AdbTransport) {
         throw IOException("failed to read from $service", t)
     }
 
-    /** Streams [data] onto the target's [path] via `exec:cat >`. */
+    /**
+     * Streams [data] onto the target's [path] via `exec:cat >`, one [chunkSize]-sized write at
+     * a time. Each write (and the initial open) is individually timeout-bounded, not the whole
+     * transfer — a large file legitimately taking minutes isn't penalized the way one
+     * whole-operation timeout would, while a connection that goes quiet mid-transfer still gets
+     * caught within [COMMAND_TIMEOUT_MILLIS] of its last successful write.
+     */
     suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024): Unit = try {
-        withTimeout(COMMAND_TIMEOUT_MILLIS) {
-            val stream = transport.open("exec:cat > '$path'")
-            try {
-                data.toList().chunked(chunkSize).forEach { chunk ->
-                    stream.write(chunk.toByteArray())
-                }
-            } finally {
-                stream.close()
+        val stream = withTimeout(COMMAND_TIMEOUT_MILLIS) { transport.open("exec:cat > '$path'") }
+        try {
+            data.toList().chunked(chunkSize).forEach { chunk ->
+                withTimeout(COMMAND_TIMEOUT_MILLIS) { stream.write(chunk.toByteArray()) }
             }
+        } finally {
+            stream.close()
         }
     } catch (c: TimeoutCancellationException) {
         throw IOException("timed out writing to $path", c)
@@ -75,8 +79,39 @@ class AdbClient(private val transport: AdbTransport) {
         throw IOException("failed to write to $path", t)
     }
 
-    /** Reads a file off the target via `exec:cat`. */
-    suspend fun pull(path: String): ByteArray = raw("exec:cat '$path'")
+    /**
+     * Reads a file off the target via `exec:cat`, one chunk at a time into [sink] — never holds
+     * the whole file in memory, and (see [push]'s doc) each chunk is individually
+     * timeout-bounded rather than the whole transfer.
+     */
+    suspend fun pullTo(path: String, sink: (ByteArray) -> Unit) {
+        try {
+            val stream = withTimeout(COMMAND_TIMEOUT_MILLIS) { transport.open("exec:cat '$path'") }
+            try {
+                while (true) {
+                    val chunk = withTimeout(COMMAND_TIMEOUT_MILLIS) { stream.readChunk() } ?: break
+                    sink(chunk)
+                }
+            } finally {
+                stream.close()
+            }
+        } catch (c: TimeoutCancellationException) {
+            throw IOException("timed out reading from $path", c)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            throw IOException("failed to read from $path", t)
+        }
+    }
+
+    /** Small-payload convenience over [pullTo] (e.g. short config files) — loads the whole
+     * result into memory, so callers expecting a possibly-large file should use [pullTo]
+     * directly instead (see [com.rel.adbhelper.features.files.FilesViewModel.download]). */
+    suspend fun pull(path: String): ByteArray {
+        val buffer = java.io.ByteArrayOutputStream()
+        pullTo(path) { buffer.write(it) }
+        return buffer.toByteArray()
+    }
 
     private suspend fun runShell(command: String): AdbResult {
         val stream = transport.open("shell:$command; echo $EXIT_CODE_MARKER\$?")

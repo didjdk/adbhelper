@@ -105,13 +105,17 @@ class FilesViewModel(
 
     fun download(entry: FileEntry, saveContext: android.content.Context) {
         scope.launch {
+            val dir = saveContext.getExternalFilesDir("Downloads") ?: saveContext.filesDir
+            val file = java.io.File(dir, entry.name)
             try {
-                val bytes = client.pull(entry.path)
-                val dir = saveContext.getExternalFilesDir("Downloads") ?: saveContext.filesDir
-                val file = java.io.File(dir, entry.name)
-                file.writeBytes(bytes)
+                // Streams chunk-by-chunk straight to disk — entry.size can be arbitrarily large
+                // (a video, an APK), so never buffer the whole file in memory first.
+                file.outputStream().use { out ->
+                    client.pullTo(entry.path) { chunk -> out.write(chunk) }
+                }
                 _state.value = _state.value.copy(message = "Downloaded to ${file.absolutePath}")
             } catch (t: Throwable) {
+                file.delete()
                 _state.value = _state.value.copy(message = "Download failed")
             }
         }
