@@ -15,6 +15,9 @@ class FakeAdbTransport(
     private val chunkSize: Int = Int.MAX_VALUE,
     /** Never returns from [open] — simulates an unresponsive/unreachable target. */
     private val hangOnOpen: Boolean = false,
+    /** Delay before [open] responds — lets a test prove calls run concurrently rather than
+     * sequentially, by checking virtual time against this delay via a [kotlinx.coroutines.test.TestScope]. */
+    private val openDelayMillis: Long = 0,
 ) : AdbTransport {
 
     /** Bytes written to each service, for asserting push behavior. */
@@ -22,6 +25,7 @@ class FakeAdbTransport(
     val closedServices = mutableSetOf<String>()
 
     override suspend fun open(service: String): AdbStream {
+        if (openDelayMillis > 0) kotlinx.coroutines.delay(openDelayMillis)
         if (hangOnOpen) awaitCancellation()
         throwOnOpen?.let { throw it }
         serviceOutputs[service]?.let { bytes ->

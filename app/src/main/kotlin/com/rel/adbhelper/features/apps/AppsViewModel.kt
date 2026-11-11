@@ -10,6 +10,9 @@ import com.rel.adbhelper.core.apps.parsePmList
 import com.rel.adbhelper.core.shell.shellQuote
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,9 +40,17 @@ class AppsViewModel(
         scope.launch {
             _state.value = _state.value.copy(loading = true)
             try {
-                val thirdParty = parsePmList(client.shell("pm list packages -3").success().orEmpty())
-                val system = parsePmList(client.shell("pm list packages -s").success().orEmpty())
-                val disabled = parsePmList(client.shell("pm list packages -d").success().orEmpty()).toSet()
+                // Three independent reads — run them concurrently so a slow/laggy link costs one
+                // round trip's wait instead of three stacked on top of each other.
+                val (thirdPartyRaw, systemRaw, disabledRaw) = coroutineScope {
+                    val thirdParty = async { client.shell("pm list packages -3").success().orEmpty() }
+                    val system = async { client.shell("pm list packages -s").success().orEmpty() }
+                    val disabled = async { client.shell("pm list packages -d").success().orEmpty() }
+                    awaitAll(thirdParty, system, disabled)
+                }
+                val thirdParty = parsePmList(thirdPartyRaw)
+                val system = parsePmList(systemRaw)
+                val disabled = parsePmList(disabledRaw).toSet()
                 val apps = (thirdParty + system)
                     .map { AppEntry(pkg = it, isSystem = it !in thirdParty.toSet(), isEnabled = it !in disabled) }
                     .sortedBy { it.pkg }
