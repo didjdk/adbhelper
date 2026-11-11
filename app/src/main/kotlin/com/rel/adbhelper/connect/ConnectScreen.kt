@@ -22,7 +22,7 @@ import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.NetworkAdbTransport
 
 @Composable
-fun ConnectScreen(modifier: Modifier = Modifier) {
+fun ConnectScreen(modifier: Modifier = Modifier, onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val viewModel = remember {
         ConnectViewModel(connect = { host, port ->
@@ -53,6 +53,9 @@ fun ConnectScreen(modifier: Modifier = Modifier) {
             Text("Connect")
         }
         Text(text = statusText(state))
+        androidx.compose.material3.TextButton(onClick = onOpenSettings) {
+            Text("Settings")
+        }
     }
 }
 
