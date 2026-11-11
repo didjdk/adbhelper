@@ -2,6 +2,10 @@ package com.rel.adbhelper.core.adb
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.io.IOException
 
@@ -16,16 +20,49 @@ private val EXIT_CODE_LINE = Regex("$EXIT_CODE_MARKER(\\d+)\\s*\$")
 
 /** Every one-shot call below is bounded by this — without it, an unresponsive or unreachable
  * target leaves the calling screen on "Loading…"/stuck forever instead of surfacing a failure.
- * [openService] is deliberately excluded: it hands back a long-lived stream (terminal, mirror)
- * whose whole point is to stay open past any such window. */
+ * [AdbClient.openService] is deliberately excluded: it hands back a long-lived stream (terminal,
+ * mirror) whose whole point is to stay open past any such window. */
 private const val COMMAND_TIMEOUT_MILLIS = 15_000L
 
-class AdbClient(private val transport: AdbTransport) {
+/**
+ * The library's stream reads/writes are raw blocking socket I/O with no timeout of their own —
+ * there is no suspension point inside them for coroutine cancellation to land on, so a plain
+ * `withTimeout` wrapped around a call to [AdbStream.readAll]/[AdbStream.readChunk]/[AdbStream.write]
+ * cannot actually interrupt it: it marks the coroutine cancelled, but the blocked thread only
+ * notices once the blocking call itself returns, which on a dead link is never. Closing the
+ * stream from a separate watchdog coroutine is what actually unblocks it — the underlying socket
+ * throws on the blocked thread once it's closed out from under it (true on Android/Linux, which
+ * is what this ships on). Reproduced live against a real, unresponsive target: `pm list packages`
+ * sat on "Loading…" for nearly a minute despite this client's own 15s timeout, before this fix.
+ *
+ * Deliberately NOT nested inside an outer `withTimeout` of the same duration: a same-duration
+ * outer timeout races this watchdog's own `delay`, and if the outer cancellation reaches this
+ * coroutine scope first, it cancels the watchdog's `delay` before it ever calls `close()` —
+ * cooperative cancellation alone, with nothing left to unstick the real blocked thread. This
+ * watchdog has to be the only clock racing the blocking call, not one of two.
+ */
+private suspend fun <T> AdbStream.timingOutOnClose(timeoutMillis: Long, block: suspend AdbStream.() -> T): T =
+    coroutineScope {
+        val work = async { block() }
+        val watchdog = launch {
+            delay(timeoutMillis)
+            close()
+        }
+        try {
+            work.await()
+        } finally {
+            watchdog.cancel()
+        }
+    }
+
+class AdbClient(
+    private val transport: AdbTransport,
+    /** Exposed for tests only, to prove the watchdog-close behavior below without a real 15s wait. */
+    private val commandTimeoutMillis: Long = COMMAND_TIMEOUT_MILLIS,
+) {
 
     suspend fun shell(command: String): AdbResult = try {
-        withTimeout(COMMAND_TIMEOUT_MILLIS) { runShell(command) }
-    } catch (c: TimeoutCancellationException) {
-        AdbResult.TransportUnreachable(c)
+        runShell(command)
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
@@ -39,16 +76,12 @@ class AdbClient(private val transport: AdbTransport) {
 
     /** Reads a raw service's full byte output — no shell exit-marker framing. */
     suspend fun raw(service: String): ByteArray = try {
-        withTimeout(COMMAND_TIMEOUT_MILLIS) {
-            val stream = transport.open(service)
-            try {
-                stream.readAll()
-            } finally {
-                stream.close()
-            }
+        val stream = openWithTimeout(service)
+        try {
+            stream.timingOutOnClose(commandTimeoutMillis) { readAll() }
+        } finally {
+            stream.close()
         }
-    } catch (c: TimeoutCancellationException) {
-        throw IOException("timed out reading from $service", c)
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
@@ -63,16 +96,14 @@ class AdbClient(private val transport: AdbTransport) {
      * caught within [COMMAND_TIMEOUT_MILLIS] of its last successful write.
      */
     suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024): Unit = try {
-        val stream = withTimeout(COMMAND_TIMEOUT_MILLIS) { transport.open("exec:cat > '$path'") }
+        val stream = openWithTimeout("exec:cat > '$path'")
         try {
             data.toList().chunked(chunkSize).forEach { chunk ->
-                withTimeout(COMMAND_TIMEOUT_MILLIS) { stream.write(chunk.toByteArray()) }
+                stream.timingOutOnClose(commandTimeoutMillis) { write(chunk.toByteArray()) }
             }
         } finally {
             stream.close()
         }
-    } catch (c: TimeoutCancellationException) {
-        throw IOException("timed out writing to $path", c)
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
@@ -86,17 +117,15 @@ class AdbClient(private val transport: AdbTransport) {
      */
     suspend fun pullTo(path: String, sink: (ByteArray) -> Unit) {
         try {
-            val stream = withTimeout(COMMAND_TIMEOUT_MILLIS) { transport.open("exec:cat '$path'") }
+            val stream = openWithTimeout("exec:cat '$path'")
             try {
                 while (true) {
-                    val chunk = withTimeout(COMMAND_TIMEOUT_MILLIS) { stream.readChunk() } ?: break
+                    val chunk = stream.timingOutOnClose(commandTimeoutMillis) { readChunk() } ?: break
                     sink(chunk)
                 }
             } finally {
                 stream.close()
             }
-        } catch (c: TimeoutCancellationException) {
-            throw IOException("timed out reading from $path", c)
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
@@ -113,10 +142,20 @@ class AdbClient(private val transport: AdbTransport) {
         return buffer.toByteArray()
     }
 
+    /** Bounds [transport.open] — the one place this client still relies on plain coroutine
+     * cancellation, because there's no stream yet to close. A target that accepts the raw
+     * connection but never completes the handshake can still hang this past [commandTimeoutMillis]
+     * (same accepted limitation as [AdbKeyConnectionManager.connectTo]'s doc). */
+    private suspend fun openWithTimeout(service: String): AdbStream = try {
+        withTimeout(commandTimeoutMillis) { transport.open(service) }
+    } catch (c: TimeoutCancellationException) {
+        throw IOException("timed out opening $service", c)
+    }
+
     private suspend fun runShell(command: String): AdbResult {
-        val stream = transport.open("shell:$command; echo $EXIT_CODE_MARKER\$?")
+        val stream = openWithTimeout("shell:$command; echo $EXIT_CODE_MARKER\$?")
         try {
-            val text = String(stream.readAll(), Charsets.UTF_8)
+            val text = String(stream.timingOutOnClose(commandTimeoutMillis) { readAll() }, Charsets.UTF_8)
             val match = EXIT_CODE_LINE.find(text)
                 ?: return AdbResult.CommandFailed("remote shell closed without an exit status")
             val exitCode = match.groupValues[1].toInt()

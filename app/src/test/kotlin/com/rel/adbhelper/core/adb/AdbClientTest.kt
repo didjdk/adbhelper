@@ -113,6 +113,45 @@ class AdbClientTest {
     }
 
     @Test
+    fun `shell unblocks a stream stuck in a real blocking read by closing it, not just cancelling the coroutine`() {
+        // Reproduces the real bug, live-observed against a real (slow/unresponsive) target: the
+        // library's stream read is a blocking java.net.Socket read with no socket timeout of its
+        // own — there's no suspension point inside it for plain coroutine cancellation to land
+        // on, so the old code's `withTimeout` alone left the UI on "Loading…" far past its own
+        // 15s bound (`pm list packages` sat for nearly a minute before this fix). A real socket's
+        // close() unblocks a thread parked in its pending read (true on Android/Linux, which is
+        // what this ships on) — modeled here with a CountDownLatch standing in for that blocked
+        // read, released only by close(), so the test doesn't depend on this JVM/OS's own socket
+        // behavior to prove that OUR code calls close() once the watchdog timeout elapses.
+        // assertTimeoutPreemptively is the safety net: if a regression drops the watchdog, the
+        // test fails instead of hanging CI.
+        org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(5)) {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var closeCalled = false
+            val transport = object : AdbTransport {
+                override suspend fun open(service: String): AdbStream = object : AdbStream {
+                    override suspend fun write(data: ByteArray) {}
+                    override suspend fun readAll(): ByteArray =
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            latch.await() // blocks the real thread; only close() below releases it
+                            ByteArray(0)
+                        }
+                    override suspend fun readChunk(): ByteArray? = null
+                    override fun close() {
+                        closeCalled = true
+                        latch.countDown()
+                    }
+                }
+            }
+            val result = kotlinx.coroutines.runBlocking {
+                AdbClient(transport, commandTimeoutMillis = 300).shell("echo hi")
+            }
+            assertTrue(closeCalled, "expected the watchdog to close the stuck stream")
+            assertTrue(result is AdbResult.CommandFailed, "expected the unblocked (empty) read to parse as a failed command, not hang")
+        }
+    }
+
+    @Test
     fun `readChunk yields the stream in bounded chunks and then null`() = runTest {
         val payload = ByteArray(5) { it.toByte() }
         val transport = FakeAdbTransport(serviceOutputs = mapOf("s" to payload), chunkSize = 2)
