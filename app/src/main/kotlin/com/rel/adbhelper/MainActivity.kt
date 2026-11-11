@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
@@ -26,8 +27,8 @@ class MainActivity : ComponentActivity() {
                 // system bars unless it explicitly insets itself, which previously left
                 // top-of-screen controls (e.g. Settings' first switch) unreachable because
                 // touches there were consumed by the status bar instead of the app.
-                Surface(modifier = Modifier.safeDrawingPadding()) {
-                    AppNavHost()
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    AppNavHost(modifier = Modifier.safeDrawingPadding())
                 }
             }
         }

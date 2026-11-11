@@ -1,6 +1,7 @@
 package com.rel.adbhelper.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -19,8 +20,8 @@ private const val ROUTE_FEEDBACK = "feedback"
  * Hosts the app's navigation graph. Connect is the start destination.
  */
 @Composable
-fun AppNavHost(navController: NavHostController = rememberNavController()) {
-    NavHost(navController = navController, startDestination = ROUTE_CONNECT) {
+fun AppNavHost(modifier: Modifier = Modifier, navController: NavHostController = rememberNavController()) {
+    NavHost(navController = navController, startDestination = ROUTE_CONNECT, modifier = modifier) {
         composable(ROUTE_CONNECT) {
             ConnectScreen(
                 onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
