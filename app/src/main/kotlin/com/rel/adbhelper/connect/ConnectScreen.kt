@@ -2,7 +2,6 @@ package com.rel.adbhelper.connect
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -11,7 +10,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -26,14 +24,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.NetworkAdbTransport
+import com.rel.adbhelper.core.session.DeviceSession
 import com.rel.adbhelper.ui.components.SignalMark
 
 @Composable
 fun ConnectScreen(
     modifier: Modifier = Modifier,
-    onOpenSettings: () -> Unit = {},
-    onOpenAbout: () -> Unit = {},
-    onOpenFeedback: () -> Unit = {},
+    onConnected: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val viewModel = remember {
@@ -44,6 +41,17 @@ fun ConnectScreen(
     }
     val state by viewModel.state.collectAsState()
     var hostPortText by rememberSaveable { mutableStateOf("") }
+
+    // The device hub owns the connected target from here on; detach on leaving it is
+    // handled inside DeviceScreen's lifecycle (DisposableEffect) rather than here.
+    androidx.compose.runtime.LaunchedEffect(state) {
+        if (state is ConnectUiState.Connected) {
+            val target = (state as ConnectUiState.Connected).target
+            val (host, port) = parseHostPort(target)!!
+            DeviceSession.attach(target, AdbClient(NetworkAdbTransport(context.applicationContext, host, port)))
+            onConnected()
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 24.dp),
@@ -89,15 +97,6 @@ fun ConnectScreen(
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(top = 12.dp),
         )
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            TextButton(onClick = onOpenSettings) { Text("Settings") }
-            TextButton(onClick = onOpenAbout) { Text("About") }
-            TextButton(onClick = onOpenFeedback) { Text("Feedback") }
-        }
     }
 }
 

@@ -31,12 +31,20 @@ class NetworkAdbTransport(
 
 private class LibraryAdbStream(private val delegate: io.github.muntashirakon.adb.AdbStream) : AdbStream {
 
+    private val input by lazy { delegate.openInputStream() }
+
     override suspend fun write(data: ByteArray) = withContext(Dispatchers.IO) {
         delegate.openOutputStream().write(data)
     }
 
     override suspend fun readAll(): ByteArray = withContext(Dispatchers.IO) {
-        delegate.openInputStream().readBytes()
+        input.readBytes()
+    }
+
+    override suspend fun readChunk(): ByteArray? = withContext(Dispatchers.IO) {
+        val buffer = ByteArray(4096)
+        val read = input.read(buffer)
+        if (read <= 0) null else buffer.copyOf(read)
     }
 
     override fun close() = delegate.close()

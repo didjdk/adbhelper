@@ -52,4 +52,41 @@ class AdbClientTest {
             kotlinx.coroutines.runBlocking { AdbClient(transport).shell("echo hi") }
         }
     }
+
+    @Test
+    fun `raw returns the stream bytes verbatim without any exit-marker framing`() = runTest {
+        val payload = byteArrayOf(0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte(), 0x00.toByte(), 0x0A.toByte())
+        val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:screencap -p" to payload))
+        val bytes = AdbClient(transport).raw("exec:screencap -p")
+        assertTrue(payload.contentEquals(bytes))
+    }
+
+    @Test
+    fun `push writes the payload to the exec service and closes the stream`() = runTest {
+        val payload = "binary-ish".toByteArray()
+        val transport = FakeAdbTransport()
+        AdbClient(transport).push("/data/local/tmp/x", payload)
+        val written = transport.writtenByService["exec:cat > '/data/local/tmp/x'"].orEmpty()
+        assertTrue(written.single().contentEquals(payload))
+        assertTrue("exec:cat > '/data/local/tmp/x'" in transport.closedServices)
+    }
+
+    @Test
+    fun `pull returns the streamed bytes for the requested path`() = runTest {
+        val payload = "file content".toByteArray()
+        val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/a.txt'" to payload))
+        val bytes = AdbClient(transport).pull("/sdcard/a.txt")
+        assertTrue(payload.contentEquals(bytes))
+    }
+
+    @Test
+    fun `readChunk yields the stream in bounded chunks and then null`() = runTest {
+        val payload = ByteArray(5) { it.toByte() }
+        val transport = FakeAdbTransport(serviceOutputs = mapOf("s" to payload), chunkSize = 2)
+        val stream = transport.open("s")
+        assertEquals(listOf<Byte>(0, 1), stream.readChunk()!!.toList())
+        assertEquals(listOf<Byte>(2, 3), stream.readChunk()!!.toList())
+        assertEquals(listOf<Byte>(4), stream.readChunk()!!.toList())
+        assertEquals(null, stream.readChunk())
+    }
 }

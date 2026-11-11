@@ -6,37 +6,27 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.rel.adbhelper.about.AboutScreen
 import com.rel.adbhelper.connect.ConnectScreen
-import com.rel.adbhelper.feedback.FeedbackScreen
-import com.rel.adbhelper.settings.SettingsScreen
+import com.rel.adbhelper.device.DeviceScreen
 
 private const val ROUTE_CONNECT = "connect"
-private const val ROUTE_SETTINGS = "settings"
-private const val ROUTE_ABOUT = "about"
-private const val ROUTE_FEEDBACK = "feedback"
+private const val ROUTE_DEVICE = "device"
 
 /**
- * Hosts the app's navigation graph. Connect is the start destination.
+ * Hosts the app's navigation graph. Connect is the start destination; once a target is
+ * connected the hub [DeviceScreen] takes over.
  */
 @Composable
-fun AppNavHost(modifier: Modifier = Modifier, navController: NavHostController = rememberNavController()) {
+fun AppNavHost(
+    modifier: Modifier = Modifier,
+    navController: NavHostController = rememberNavController(),
+) {
     NavHost(navController = navController, startDestination = ROUTE_CONNECT, modifier = modifier) {
         composable(ROUTE_CONNECT) {
-            ConnectScreen(
-                onOpenSettings = { navController.navigate(ROUTE_SETTINGS) },
-                onOpenAbout = { navController.navigate(ROUTE_ABOUT) },
-                onOpenFeedback = { navController.navigate(ROUTE_FEEDBACK) },
-            )
+            ConnectScreen(onConnected = { navController.navigate(ROUTE_DEVICE) })
         }
-        composable(ROUTE_SETTINGS) {
-            SettingsScreen(onBack = navController::popBackStack)
-        }
-        composable(ROUTE_ABOUT) {
-            AboutScreen(onBack = navController::popBackStack)
-        }
-        composable(ROUTE_FEEDBACK) {
-            FeedbackScreen(onBack = navController::popBackStack)
+        composable(ROUTE_DEVICE) {
+            DeviceScreen()
         }
     }
 }

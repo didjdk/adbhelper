@@ -13,5 +13,10 @@ interface AdbTransport {
 interface AdbStream {
     suspend fun write(data: ByteArray)
     suspend fun readAll(): ByteArray
+
+    /** Next available bytes, or null once the stream is at EOF/closed — how interactive
+     * services (terminal, mirror video) consume output incrementally. */
+    suspend fun readChunk(): ByteArray?
+
     fun close()
 }
