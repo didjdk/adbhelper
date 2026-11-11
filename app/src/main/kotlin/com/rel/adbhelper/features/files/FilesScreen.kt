@@ -3,7 +3,9 @@ package com.rel.adbhelper.features.files
 import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,8 +15,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -83,30 +90,14 @@ fun FilesScreen(modifier: Modifier = Modifier) {
                 state.entries.filter { state.showHidden || !it.name.startsWith(".") },
                 key = { it.path },
             ) { entry ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            (if (entry.isDir) "${entry.name}/" else entry.name),
-                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                        )
-                        Text(
-                            if (entry.isSymlink) "symlink" else "${entry.size} B · ${entry.perms}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    TextButton(onClick = { viewModel.copy(entry) }) { Text("Copy") }
-                    TextButton(onClick = { dialog = FilesDialog.Rename(entry) }) { Text("Rename") }
-                    TextButton(onClick = { dialog = FilesDialog.Delete(entry) }) { Text("Delete") }
-                    TextButton(onClick = { viewModel.entryClick(entry) }) { Text("Open") }
-                    if (!entry.isDir) {
-                        TextButton(onClick = { viewModel.download(entry, context) }) { Text("Get") }
-                    }
-                }
+                FileRow(
+                    entry = entry,
+                    onOpen = { viewModel.entryClick(entry) },
+                    onCopy = { viewModel.copy(entry) },
+                    onRename = { dialog = FilesDialog.Rename(entry) },
+                    onDelete = { dialog = FilesDialog.Delete(entry) },
+                    onDownload = { viewModel.download(entry, context) },
+                )
             }
         }
     }
@@ -159,6 +150,58 @@ fun FilesScreen(modifier: Modifier = Modifier) {
             },
             confirmButton = { TextButton(onClick = { viewModel.dismissInfo() }) { Text("Close") } },
         )
+    }
+}
+
+/**
+ * One file/folder row: tap opens it (directory → browse, file → info dialog, per
+ * [FilesViewModel.entryClick]); everything else lives behind the overflow menu so the row stays
+ * readable instead of a wall of text buttons at every width.
+ */
+@Composable
+private fun FileRow(
+    entry: FileEntry,
+    onOpen: () -> Unit,
+    onCopy: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onDownload: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                // Directory names get a trailing slash — the same convention `ls` itself uses,
+                // and the quickest "is this a folder" tell without a dedicated icon asset.
+                if (entry.isDir) "${entry.name}/" else entry.name,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = FontFamily.Monospace,
+                    color = if (entry.isDir) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                ),
+            )
+            Text(
+                if (entry.isSymlink) "symlink" else "${entry.size} B · ${entry.perms}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "More actions for ${entry.name}")
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                if (!entry.isDir) {
+                    DropdownMenuItem(text = { Text("Download") }, onClick = { menuOpen = false; onDownload() })
+                }
+                DropdownMenuItem(text = { Text("Copy") }, onClick = { menuOpen = false; onCopy() })
+                DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; onRename() })
+                DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; onDelete() })
+            }
+        }
     }
 }
 
