@@ -1,6 +1,9 @@
 package com.rel.adbhelper.core.adb
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -8,40 +11,46 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.IOException
 
+/** Dispatchers.Unconfined, not the production-default Dispatchers.Default: under `runTest`'s
+ * virtual time, a watchdog on a real dispatcher never gets its `delay` routed through the test's
+ * virtual scheduler, so it just never fires — these tests would hang or mis-report. Unconfined
+ * stays inside the ambient (test) dispatcher chain instead of escaping to a real thread pool. */
+private fun client(transport: AdbTransport) = AdbClient(transport, watchdogDispatcher = Dispatchers.Unconfined)
+
 class AdbClientTest {
 
     @Test
     fun `shell returns Success with command output when transport succeeds`() = runTest {
         val transport = FakeAdbTransport(scriptedOutput = "hello\n", exitCode = 0)
-        val result = AdbClient(transport).shell("echo hello")
+        val result = client(transport).shell("echo hello")
         assertEquals(AdbResult.Success("hello\n"), result)
     }
 
     @Test
     fun `shell returns CommandFailed when the remote command exits non-zero`() = runTest {
         val transport = FakeAdbTransport(scriptedOutput = "", exitCode = 1)
-        val result = AdbClient(transport).shell("false")
+        val result = client(transport).shell("false")
         assertTrue(result is AdbResult.CommandFailed)
     }
 
     @Test
     fun `shell returns TransportUnreachable when opening the stream throws`() = runTest {
         val transport = FakeAdbTransport(throwOnOpen = IOException("refused"))
-        val result = AdbClient(transport).shell("echo hi")
+        val result = client(transport).shell("echo hi")
         assertTrue(result is AdbResult.TransportUnreachable)
     }
 
     @Test
     fun `shell returns TransportUnreachable when the connection drops mid-read`() = runTest {
         val transport = FakeAdbTransport(throwOnRead = IOException("connection reset"))
-        val result = AdbClient(transport).shell("echo hi")
+        val result = client(transport).shell("echo hi")
         assertTrue(result is AdbResult.TransportUnreachable)
     }
 
     @Test
     fun `shell returns CommandFailed when the stream ends without an exit marker`() = runTest {
         val transport = FakeAdbTransport(scriptedOutput = "partial output", omitExitMarker = true)
-        val result = AdbClient(transport).shell("echo hi")
+        val result = client(transport).shell("echo hi")
         assertTrue(result is AdbResult.CommandFailed)
     }
 
@@ -49,14 +58,14 @@ class AdbClientTest {
     fun `shell rethrows cancellation rather than reporting it as a transport failure`() = runTest {
         val transport = FakeAdbTransport(throwOnRead = CancellationException("cancelled"))
         assertThrows(CancellationException::class.java) {
-            kotlinx.coroutines.runBlocking { AdbClient(transport).shell("echo hi") }
+            kotlinx.coroutines.runBlocking { client(transport).shell("echo hi") }
         }
     }
 
     @Test
     fun `shell times out against an unresponsive transport rather than hanging forever`() = runTest {
         val transport = FakeAdbTransport(hangOnOpen = true)
-        val result = AdbClient(transport).shell("echo hi")
+        val result = client(transport).shell("echo hi")
         assertTrue(result is AdbResult.TransportUnreachable)
     }
 
@@ -65,7 +74,7 @@ class AdbClientTest {
         val transport = FakeAdbTransport(hangOnOpen = true)
         var threwIOException = false
         try {
-            AdbClient(transport).raw("exec:screencap -p")
+            client(transport).raw("exec:screencap -p")
         } catch (e: IOException) {
             threwIOException = true
         }
@@ -76,7 +85,7 @@ class AdbClientTest {
     fun `raw returns the stream bytes verbatim without any exit-marker framing`() = runTest {
         val payload = byteArrayOf(0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte(), 0x00.toByte(), 0x0A.toByte())
         val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:screencap -p" to payload))
-        val bytes = AdbClient(transport).raw("exec:screencap -p")
+        val bytes = client(transport).raw("exec:screencap -p")
         assertTrue(payload.contentEquals(bytes))
     }
 
@@ -84,7 +93,7 @@ class AdbClientTest {
     fun `push writes the payload to the exec service and closes the stream`() = runTest {
         val payload = "binary-ish".toByteArray()
         val transport = FakeAdbTransport()
-        AdbClient(transport).push("/data/local/tmp/x", payload)
+        client(transport).push("/data/local/tmp/x", payload)
         val written = transport.writtenByService["exec:cat > '/data/local/tmp/x'"].orEmpty()
         assertTrue(written.single().contentEquals(payload))
         assertTrue("exec:cat > '/data/local/tmp/x'" in transport.closedServices)
@@ -94,7 +103,7 @@ class AdbClientTest {
     fun `pull returns the streamed bytes for the requested path`() = runTest {
         val payload = "file content".toByteArray()
         val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/a.txt'" to payload))
-        val bytes = AdbClient(transport).pull("/sdcard/a.txt")
+        val bytes = client(transport).pull("/sdcard/a.txt")
         assertTrue(payload.contentEquals(bytes))
     }
 
@@ -104,7 +113,7 @@ class AdbClientTest {
         val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/big.bin'" to payload), chunkSize = 4)
         val delivered = mutableListOf<ByteArray>()
         var maxSeenAtOnce = 0
-        AdbClient(transport).pullTo("/sdcard/big.bin") { chunk ->
+        client(transport).pullTo("/sdcard/big.bin") { chunk ->
             delivered += chunk
             maxSeenAtOnce = maxOf(maxSeenAtOnce, chunk.size)
         }
@@ -148,6 +157,49 @@ class AdbClientTest {
             }
             assertTrue(closeCalled, "expected the watchdog to close the stuck stream")
             assertTrue(result is AdbResult.CommandFailed, "expected the unblocked (empty) read to parse as a failed command, not hang")
+        }
+    }
+
+    @Test
+    fun `watchdog still fires when launched the same way every ViewModel in this app does`() {
+        // Live-observed against a real target, with logging that watched the watchdog arm but
+        // never fire even 30+ seconds past its own configured timeout: "Connecting…" stayed on
+        // screen well past every layer of timeout this app has. The fix was pinning the watchdog
+        // to Dispatchers.Default instead of letting it inherit its dispatcher from the caller
+        // (every ViewModel here launches on CoroutineScope(Dispatchers.Unconfined), reproduced
+        // below). This test does NOT reproduce that exact failure on a clean JVM — it passes
+        // either way, most likely because the live hang needed a process already carrying
+        // several other permanently-blocked IO threads from earlier stuck attempts, a precondition
+        // a fresh test can't set up. Kept anyway as a real, if weaker, safety net: it still proves
+        // the watchdog mechanism closes a genuinely stuck stream under this exact calling pattern.
+        // Uses AdbClient's production default watchdogDispatcher (no override), unlike the other
+        // tests in this file.
+        org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(5)) {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var closeCalled = false
+            val transport = object : AdbTransport {
+                override suspend fun open(service: String): AdbStream = object : AdbStream {
+                    override suspend fun write(data: ByteArray) {}
+                    override suspend fun readAll(): ByteArray =
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            latch.await()
+                            ByteArray(0)
+                        }
+                    override suspend fun readChunk(): ByteArray? = null
+                    override fun close() {
+                        closeCalled = true
+                        latch.countDown()
+                    }
+                }
+            }
+            val resultDeferred = java.util.concurrent.CompletableFuture<AdbResult>()
+            val viewModelScope = CoroutineScope(Dispatchers.Unconfined)
+            viewModelScope.launch {
+                resultDeferred.complete(AdbClient(transport, commandTimeoutMillis = 300).shell("echo hi"))
+            }
+            val result = resultDeferred.get(4, java.util.concurrent.TimeUnit.SECONDS)
+            assertTrue(closeCalled, "expected the watchdog to fire and close the stuck stream")
+            assertTrue(result is AdbResult.CommandFailed)
         }
     }
 

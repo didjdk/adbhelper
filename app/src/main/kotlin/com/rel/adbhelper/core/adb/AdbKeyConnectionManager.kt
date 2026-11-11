@@ -3,6 +3,8 @@ package com.rel.adbhelper.core.adb
 import android.content.Context
 import android.os.Build
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.cert.X509v3CertificateBuilder
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
@@ -50,27 +52,44 @@ class AdbKeyConnectionManager private constructor(
     override fun getCertificate(): Certificate = certificate
     override fun getDeviceName(): String = "ADB Helper"
 
+    /** Guards against concurrent callers racing into [connect] at once — see [ConnectGate]'s doc
+     * for why that's a real, previously-live bug and not just a theoretical one. Not a plain
+     * `@Synchronized`: that would be a second place a thread can get stuck forever against a
+     * target that accepts the raw TCP connection but never finishes the ADB handshake, since
+     * `connect`'s underlying `java.net.Socket` connect is blocking with no suspension point for
+     * `withTimeout` to cancel. A coroutine [Mutex] (inside [ConnectGate]) keeps every OTHER
+     * caller's wait a real, cancellable suspension point instead. */
+    private val connectGate = ConnectGate()
+
+    /** Serializes [openStream] itself — live-reproduced: several `shell()` calls fired at once
+     * (e.g. [com.rel.adbhelper.features.apps.AppsViewModel.load]'s three concurrent package-list
+     * reads) opening streams on this one shared connection at the same instant silently
+     * corrupted some of them — no exception, just a command that came back empty, which read as
+     * "this device has no apps installed" instead of the real failure. The library's own
+     * `openStream` has no documented thread-safety guarantee for concurrent calls on one
+     * connection, matching the behavior actually observed. Only the brief act of opening is
+     * serialized here; the read/write that follows on each resulting stream still runs
+     * concurrently with the others, so this doesn't undo the latency win of running them in
+     * parallel in the first place. */
+    private val streamOpenMutex = Mutex()
+
+    suspend fun openStreamSerialized(service: String): io.github.muntashirakon.adb.AdbStream =
+        streamOpenMutex.withLock { openStream(service) }
+
     /**
      * Connects to [host]:[port], reconnecting first if already connected to a different target.
      * Reusing an existing connection to the wrong target would make every later command run
      * against the wrong device.
-     *
-     * Not `@Synchronized`: the library's own `connect`/`openStream`/`disconnect` already
-     * serialize on their own internal lock, so an outer lock here would be redundant — and
-     * worse, it would be a second place a thread can get stuck forever. A target that accepts
-     * the raw TCP connection but never completes the ADB handshake can block the underlying
-     * (library-internal, blocking, no-timeout) `java.net.Socket` connect indefinitely; that is
-     * not a suspension point, so none of our `withTimeout` wrappers elsewhere can cancel it, and
-     * the only way out is killing the process. Known, accepted limitation of this transport —
-     * not something this app's own code can route around without forking the library.
      */
-    fun connectTo(host: String, port: Int): Boolean {
-        if (isConnected && hostAddress == host && connectedPort == port) return true
-        if (isConnected) disconnect()
-        val connected = connect(host, port)
-        connectedPort = if (connected) port else null
-        return connected
-    }
+    suspend fun connectTo(host: String, port: Int): Boolean = connectGate.ensureConnected(
+        alreadyConnected = { isConnected && hostAddress == host && connectedPort == port },
+        connect = {
+            if (isConnected) disconnect()
+            val connected = connect(host, port)
+            connectedPort = if (connected) port else null
+            connected
+        },
+    )
 
     companion object {
         @Volatile

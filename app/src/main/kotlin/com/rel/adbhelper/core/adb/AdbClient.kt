@@ -1,6 +1,8 @@
 package com.rel.adbhelper.core.adb
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -41,24 +43,37 @@ private const val COMMAND_TIMEOUT_MILLIS = 15_000L
  * cooperative cancellation alone, with nothing left to unstick the real blocked thread. This
  * watchdog has to be the only clock racing the blocking call, not one of two.
  */
-private suspend fun <T> AdbStream.timingOutOnClose(timeoutMillis: Long, block: suspend AdbStream.() -> T): T =
-    coroutineScope {
-        val work = async { block() }
-        val watchdog = launch {
-            delay(timeoutMillis)
-            close()
-        }
-        try {
-            work.await()
-        } finally {
-            watchdog.cancel()
-        }
+private suspend fun <T> AdbStream.timingOutOnClose(
+    timeoutMillis: Long,
+    watchdogDispatcher: CoroutineDispatcher,
+    block: suspend AdbStream.() -> T,
+): T = coroutineScope {
+    val work = async { block() }
+    // watchdogDispatcher, not inherited: when this whole chain is kicked off from a caller
+    // sitting on Dispatchers.Unconfined (several ViewModels' default scope), an inherited
+    // watchdog's own `delay` never got a dispatcher that would actually resume it — it just
+    // never fired, leaving nothing to unstick the blocked read. Reproduced live against a real
+    // target: watched the watchdog arm but never fire, even tens of seconds past its timeout,
+    // with "Connecting…" stuck on screen the whole time. Production always passes
+    // [Dispatchers.Default]; tests pass their own test dispatcher so the watchdog still
+    // participates in the test's virtual time instead of racing real wall-clock time.
+    val watchdog = launch(watchdogDispatcher) {
+        delay(timeoutMillis)
+        close()
     }
+    try {
+        work.await()
+    } finally {
+        watchdog.cancel()
+    }
+}
 
 class AdbClient(
     private val transport: AdbTransport,
     /** Exposed for tests only, to prove the watchdog-close behavior below without a real 15s wait. */
     private val commandTimeoutMillis: Long = COMMAND_TIMEOUT_MILLIS,
+    /** Exposed for tests only — see [timingOutOnClose]'s doc on why production never overrides this. */
+    private val watchdogDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
 
     suspend fun shell(command: String): AdbResult = try {
@@ -78,7 +93,7 @@ class AdbClient(
     suspend fun raw(service: String): ByteArray = try {
         val stream = openWithTimeout(service)
         try {
-            stream.timingOutOnClose(commandTimeoutMillis) { readAll() }
+            stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher) { readAll() }
         } finally {
             stream.close()
         }
@@ -99,7 +114,7 @@ class AdbClient(
         val stream = openWithTimeout("exec:cat > '$path'")
         try {
             data.toList().chunked(chunkSize).forEach { chunk ->
-                stream.timingOutOnClose(commandTimeoutMillis) { write(chunk.toByteArray()) }
+                stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher) { write(chunk.toByteArray()) }
             }
         } finally {
             stream.close()
@@ -120,7 +135,7 @@ class AdbClient(
             val stream = openWithTimeout("exec:cat '$path'")
             try {
                 while (true) {
-                    val chunk = stream.timingOutOnClose(commandTimeoutMillis) { readChunk() } ?: break
+                    val chunk = stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher) { readChunk() } ?: break
                     sink(chunk)
                 }
             } finally {
@@ -155,7 +170,7 @@ class AdbClient(
     private suspend fun runShell(command: String): AdbResult {
         val stream = openWithTimeout("shell:$command; echo $EXIT_CODE_MARKER\$?")
         try {
-            val text = String(stream.timingOutOnClose(commandTimeoutMillis) { readAll() }, Charsets.UTF_8)
+            val text = String(stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher) { readAll() }, Charsets.UTF_8)
             val match = EXIT_CODE_LINE.find(text)
                 ?: return AdbResult.CommandFailed("remote shell closed without an exit status")
             val exitCode = match.groupValues[1].toInt()

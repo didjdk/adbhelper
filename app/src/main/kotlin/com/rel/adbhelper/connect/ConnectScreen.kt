@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbKeyConnectionManager
+import com.rel.adbhelper.core.adb.AdbResult
 import com.rel.adbhelper.core.adb.NetworkAdbTransport
 import com.rel.adbhelper.core.net.LanScanner
 import com.rel.adbhelper.core.recents.RecentConnections
@@ -36,7 +37,13 @@ import com.rel.adbhelper.core.session.DeviceSession
 import com.rel.adbhelper.ui.components.SignalMark
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
+
+/** How long a scan result's real-ADB-handshake verification is given, per candidate, before
+ * it's dropped from the "Found devices" list — short, because by this point [LanScanner] has
+ * already narrowed 254 raw addresses down to the handful with something open on the port. */
+private const val SCAN_VERIFY_TIMEOUT_MILLIS = 3_000L
 
 @Composable
 fun ConnectScreen(
@@ -128,7 +135,16 @@ fun ConnectScreen(
                     scanning = true
                     scanResults = null
                     val subnet = localSubnet(context.applicationContext)
-                    scanResults = if (subnet == null) emptyList() else LanScanner.scan(subnet.first, subnet.second)
+                    val candidates = if (subnet == null) emptyList() else LanScanner.scan(subnet.first, subnet.second)
+                    // A raw TCP accept on 5555 isn't proof it's really adb on the other end —
+                    // only a real handshake is. The sweep above already did the expensive part
+                    // (254 addresses in parallel); verifying the handful of survivors one at a
+                    // time, for real, is cheap and is what keeps "Found devices" from listing an
+                    // entry that just fails the moment it's tapped.
+                    scanResults = candidates.filter { target ->
+                        val (host, port) = parseHostPort(target) ?: return@filter false
+                        canReallyAdbConnect(context.applicationContext, host, port)
+                    }
                     scanning = false
                 }
             }) { Text("Scan") }
@@ -245,6 +261,16 @@ private fun PairDialog(onDismiss: () -> Unit) {
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/** Real ADB handshake + a trivial command, bounded to [SCAN_VERIFY_TIMEOUT_MILLIS] — see the
+ * call site in [ConnectScreen]'s Scan handler for why a raw port-open check isn't enough on its
+ * own. Connect attempts against this shared [AdbKeyConnectionManager] singleton serialize
+ * (one target at a time; see [com.rel.adbhelper.core.adb.ConnectGate]), so verifying several
+ * scan candidates happens one at a time, not in parallel with each other. */
+private suspend fun canReallyAdbConnect(context: android.content.Context, host: String, port: Int): Boolean =
+    withTimeoutOrNull(SCAN_VERIFY_TIMEOUT_MILLIS) {
+        AdbClient(NetworkAdbTransport(context, host, port)).shell("echo 1") is AdbResult.Success
+    } ?: false
 
 private fun statusText(state: ConnectUiState): String = when (state) {
     is ConnectUiState.Idle -> ""

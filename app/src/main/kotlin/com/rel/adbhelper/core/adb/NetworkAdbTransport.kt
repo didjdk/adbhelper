@@ -25,7 +25,7 @@ class NetworkAdbTransport(
         if (!manager.connectTo(host, port)) {
             throw IOException("Connection to $host:$port was rejected or could not be established")
         }
-        LibraryAdbStream(manager.openStream(service))
+        LibraryAdbStream(manager.openStreamSerialized(service))
     }
 }
 
