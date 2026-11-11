@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -22,7 +23,12 @@ import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.NetworkAdbTransport
 
 @Composable
-fun ConnectScreen(modifier: Modifier = Modifier, onOpenSettings: () -> Unit = {}) {
+fun ConnectScreen(
+    modifier: Modifier = Modifier,
+    onOpenSettings: () -> Unit = {},
+    onOpenAbout: () -> Unit = {},
+    onOpenFeedback: () -> Unit = {},
+) {
     val context = LocalContext.current
     val viewModel = remember {
         ConnectViewModel(connect = { host, port ->
@@ -53,8 +59,14 @@ fun ConnectScreen(modifier: Modifier = Modifier, onOpenSettings: () -> Unit = {}
             Text("Connect")
         }
         Text(text = statusText(state))
-        androidx.compose.material3.TextButton(onClick = onOpenSettings) {
+        TextButton(onClick = onOpenSettings) {
             Text("Settings")
+        }
+        TextButton(onClick = onOpenAbout) {
+            Text("About")
+        }
+        TextButton(onClick = onOpenFeedback) {
+            Text("Feedback")
         }
     }
 }
