@@ -29,13 +29,13 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
             )
         }
         composable(ROUTE_SETTINGS) {
-            SettingsScreen()
+            SettingsScreen(onBack = navController::popBackStack)
         }
         composable(ROUTE_ABOUT) {
-            AboutScreen()
+            AboutScreen(onBack = navController::popBackStack)
         }
         composable(ROUTE_FEEDBACK) {
-            FeedbackScreen()
+            FeedbackScreen(onBack = navController::popBackStack)
         }
     }
 }
