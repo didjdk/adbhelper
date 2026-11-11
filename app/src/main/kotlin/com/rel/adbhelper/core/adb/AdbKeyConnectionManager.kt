@@ -100,6 +100,20 @@ class AdbKeyConnectionManager private constructor(
                 instance ?: create(context.applicationContext).also { instance = it }
             }
 
+        /**
+         * A fresh connection manager, independent of the [getInstance] singleton — for scan
+         * verification, where several LAN candidates must each get a real ADB handshake at once
+         * without one hijacking the app's single real session connection (the singleton holds
+         * exactly one active connection; that's correct for the app's actual session, but wrong
+         * for probing N candidates concurrently). Reuses the same persisted key — identity is
+         * per-app, not per-connection — but owns its own connect/stream state, so several of
+         * these can run truly in parallel. Caller is responsible for `disconnect()`ing it.
+         */
+        fun createDisposable(context: Context): AdbKeyConnectionManager {
+            val (privateKey, certificate) = loadOrGenerateKeyPair(context.applicationContext)
+            return AdbKeyConnectionManager(privateKey, certificate)
+        }
+
         private fun create(context: Context): AdbKeyConnectionManager {
             val (privateKey, certificate) = loadOrGenerateKeyPair(context)
             return AdbKeyConnectionManager(privateKey, certificate)

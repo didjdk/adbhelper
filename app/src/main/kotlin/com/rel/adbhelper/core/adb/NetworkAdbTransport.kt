@@ -7,19 +7,20 @@ import java.io.IOException
 
 /**
  * [AdbTransport] over a TCP connection to `host:port`, via the real ADB protocol client
- * library (`io.github.muntashirakon:libadb-android`). The library's connection manager is a
- * singleton with one active connection at a time; this transport connects it to [host]:[port]
- * on every open, reconnecting first if the manager is currently on a different target (see
- * [AdbKeyConnectionManager.connectTo]) — reusing a connection to the wrong device would route
- * later commands (install, uninstall, reboot, ...) to the wrong target.
+ * library (`io.github.muntashirakon:libadb-android`). By default this connects through the
+ * shared [AdbKeyConnectionManager] singleton (one active connection at a time), reconnecting
+ * first if the manager is currently on a different target (see [AdbKeyConnectionManager.connectTo])
+ * — reusing a connection to the wrong device would route later commands (install, uninstall,
+ * reboot, ...) to the wrong target. [manager] can be overridden with a disposable instance (see
+ * [AdbKeyConnectionManager.createDisposable]) for callers that need several independent, truly
+ * concurrent connections instead — e.g. verifying several LAN scan candidates at once.
  */
 class NetworkAdbTransport(
     private val context: Context,
     private val host: String,
     private val port: Int,
+    private val manager: AdbKeyConnectionManager = AdbKeyConnectionManager.getInstance(context),
 ) : AdbTransport {
-
-    private val manager get() = AdbKeyConnectionManager.getInstance(context)
 
     override suspend fun open(service: String): AdbStream = withContext(Dispatchers.IO) {
         if (!manager.connectTo(host, port)) {

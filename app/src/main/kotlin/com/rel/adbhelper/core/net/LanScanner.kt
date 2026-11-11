@@ -3,6 +3,8 @@ package com.rel.adbhelper.core.net
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -32,9 +34,17 @@ object LanScanner {
      * so a scan result can be connected to directly without a separate formatting step. */
     fun formatTarget(host: String, port: Int): String = "$host:$port"
 
+    /** Bounds how many raw TCP probes run at once — opening all 254 sockets at the exact same
+     * instant with no cap can itself be slow (and under memory/thread pressure, much slower than
+     * the per-probe timeout would suggest), since Dispatchers.IO's thread pool and the OS's own
+     * socket/connection-tracking limits aren't infinite either. */
+    private val sweepSemaphore = Semaphore(PARALLELISM)
+
     suspend fun scan(ip: String, prefix: Int, port: Int = ADB_PORT): List<String> = withContext(Dispatchers.IO) {
         subnetHosts(ip, prefix)
-            .map { host -> async { if (probe(host, port)) formatTarget(host, port) else null } }
+            .map { host ->
+                async { if (sweepSemaphore.withPermit { probe(host, port) }) formatTarget(host, port) else null }
+            }
             .awaitAll()
             .filterNotNull()
     }

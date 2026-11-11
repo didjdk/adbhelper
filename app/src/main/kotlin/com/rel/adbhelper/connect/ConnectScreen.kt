@@ -45,6 +45,12 @@ import kotlinx.coroutines.launch
  * already narrowed 254 raw addresses down to the handful with something open on the port. */
 private const val SCAN_VERIFY_TIMEOUT_MILLIS = 3_000L
 
+/** How many scan candidates get a real ADB handshake at once. Each uses its own disposable
+ * connection (see [com.rel.adbhelper.core.adb.AdbKeyConnectionManager.createDisposable]), so
+ * this is purely a "don't open 20 sockets at the exact same instant" cap, not a correctness
+ * requirement the way serializing the app's single real connection is. */
+private const val SCAN_VERIFY_CONCURRENCY = 5
+
 @Composable
 fun ConnectScreen(
     modifier: Modifier = Modifier,
@@ -133,18 +139,15 @@ fun ConnectScreen(
             TextButton(onClick = {
                 scope.launch {
                     scanning = true
-                    scanResults = null
+                    scanResults = emptyList()
                     val subnet = localSubnet(context.applicationContext)
                     val candidates = if (subnet == null) emptyList() else LanScanner.scan(subnet.first, subnet.second)
-                    // A raw TCP accept on 5555 isn't proof it's really adb on the other end —
-                    // only a real handshake is. The sweep above already did the expensive part
-                    // (254 addresses in parallel); verifying the handful of survivors one at a
-                    // time, for real, is cheap and is what keeps "Found devices" from listing an
-                    // entry that just fails the moment it's tapped.
-                    scanResults = candidates.filter { target ->
-                        val (host, port) = parseHostPort(target) ?: return@filter false
-                        canReallyAdbConnect(context.applicationContext, host, port)
-                    }
+                    verifyScanCandidates(
+                        candidates = candidates,
+                        concurrency = SCAN_VERIFY_CONCURRENCY,
+                        verify = { host, port -> canReallyAdbConnect(context.applicationContext, host, port) },
+                        onFound = { target -> scanResults = (scanResults.orEmpty() + target).sorted() },
+                    )
                     scanning = false
                 }
             }) { Text("Scan") }
@@ -152,18 +155,25 @@ fun ConnectScreen(
         }
 
         val scan = scanResults
-        when {
-            scanning -> Text(
+        // Scanning and the result list are shown together, not as exclusive states: results
+        // stream in while the sweep is still running, so the list grows live instead of the
+        // screen staying blank until every candidate (including any that time out) is done.
+        if (scanning) {
+            Text(
                 "Scanning for devices on the local network…",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp),
             )
-            scan != null && scan.isEmpty() -> Text(
+        }
+        if (scan != null && scan.isEmpty() && !scanning) {
+            Text(
                 "No adb devices found",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 8.dp),
             )
-            scan != null -> Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        }
+        if (scan != null && scan.isNotEmpty()) {
+            Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Text("Found devices", style = MaterialTheme.typography.titleSmall)
                 scan.forEach { target ->
                     TextButton(onClick = {
@@ -264,13 +274,19 @@ private fun PairDialog(onDismiss: () -> Unit) {
 
 /** Real ADB handshake + a trivial command, bounded to [SCAN_VERIFY_TIMEOUT_MILLIS] — see the
  * call site in [ConnectScreen]'s Scan handler for why a raw port-open check isn't enough on its
- * own. Connect attempts against this shared [AdbKeyConnectionManager] singleton serialize
- * (one target at a time; see [com.rel.adbhelper.core.adb.ConnectGate]), so verifying several
- * scan candidates happens one at a time, not in parallel with each other. */
-private suspend fun canReallyAdbConnect(context: android.content.Context, host: String, port: Int): Boolean =
-    withTimeoutOrNull(SCAN_VERIFY_TIMEOUT_MILLIS) {
-        AdbClient(NetworkAdbTransport(context, host, port)).shell("echo 1") is AdbResult.Success
-    } ?: false
+ * own. Uses its own disposable connection (not the app's shared singleton) specifically so
+ * [SCAN_VERIFY_CONCURRENCY] of these can run at the same time without one candidate's probe
+ * reconnecting the single shared connection out from under another's. */
+private suspend fun canReallyAdbConnect(context: android.content.Context, host: String, port: Int): Boolean {
+    val manager = AdbKeyConnectionManager.createDisposable(context)
+    return try {
+        withTimeoutOrNull(SCAN_VERIFY_TIMEOUT_MILLIS) {
+            AdbClient(NetworkAdbTransport(context, host, port, manager)).shell("echo 1") is AdbResult.Success
+        } ?: false
+    } finally {
+        runCatching { manager.disconnect() }
+    }
+}
 
 private fun statusText(state: ConnectUiState): String = when (state) {
     is ConnectUiState.Idle -> ""
