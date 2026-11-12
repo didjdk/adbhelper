@@ -18,6 +18,7 @@ import com.rel.adbhelper.core.session.DeviceSession
 import com.rel.adbhelper.features.apps.AppsScreen
 import com.rel.adbhelper.features.deviceinfo.InfoScreen
 import com.rel.adbhelper.features.files.FilesScreen
+import com.rel.adbhelper.features.livescreen.LiveScreenScreen
 import com.rel.adbhelper.features.power.PowerScreen
 import com.rel.adbhelper.features.processes.ProcessListScreen
 import com.rel.adbhelper.features.shell.ShellScreen
@@ -25,7 +26,7 @@ import com.rel.adbhelper.features.shell.ShellScreen
 /** Hub screen shown once a target is connected; one tab per feature. */
 @Composable
 fun DeviceScreen(modifier: Modifier = Modifier) {
-    val tabs = listOf("Info", "Apps", "Files", "Shell", "Power")
+    val tabs = listOf("Info", "Apps", "Files", "Shell", "Power", "Monitor")
     var selected by remember { mutableIntStateOf(0) }
 
     DisposableEffect(Unit) {
@@ -48,6 +49,7 @@ fun DeviceScreen(modifier: Modifier = Modifier) {
             2 -> FilesScreen()
             3 -> ShellScreen()
             4 -> PowerScreen()
+            5 -> LiveScreenScreen()
         }
     }
 }

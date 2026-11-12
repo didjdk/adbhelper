@@ -51,6 +51,22 @@ class AdbClientTest {
     }
 
     @Test
+    fun `shell's CommandFailed message includes the remote command's own output`() = runTest {
+        // Live-reproduced: `pm uninstall --user 0 com.google.android.youtube` against a
+        // non-rooted target failed with "Failure [only root can delete system app for a
+        // particular user]" on stdout, but the UI only ever showed "Command failed" — the real
+        // reason was discarded here, replaced with just the exit code, before it ever reached
+        // the caller.
+        val transport = FakeAdbTransport(
+            scriptedOutput = "Failure [only root can delete system app for a particular user]\n",
+            exitCode = 1,
+        )
+        val result = client(transport).shell("pm uninstall --user 0 com.google.android.youtube")
+        assertTrue(result is AdbResult.CommandFailed)
+        assertTrue((result as AdbResult.CommandFailed).message.contains("only root can delete system app"), result.message)
+    }
+
+    @Test
     fun `shell returns TransportUnreachable when opening the stream throws`() = runTest {
         val transport = FakeAdbTransport(throwOnOpen = IOException("refused"))
         val result = client(transport).shell("echo hi")

@@ -128,7 +128,11 @@ class AppsViewModel(
             try {
                 val result = client.shell(command)
                 _state.value = _state.value.copy(
-                    message = if (result is AdbResult.Success) successMessage else "Command failed",
+                    message = when (result) {
+                        is AdbResult.Success -> successMessage
+                        is AdbResult.CommandFailed -> result.message
+                        is AdbResult.TransportUnreachable -> "Connection to the device was lost"
+                    },
                 )
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(message = "Connection to the device was lost")

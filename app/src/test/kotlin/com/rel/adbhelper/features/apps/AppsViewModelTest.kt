@@ -47,4 +47,25 @@ class AppsViewModelTest {
         )
         assertTrue(!vm.state.value.loading, "expected load() to finish, got ${vm.state.value}")
     }
+
+    @Test
+    fun `uninstall shows the remote command's own failure reason, not a generic message`() = runTest {
+        // Live-reproduced: uninstalling YouTube (a system app) on a non-rooted target failed with
+        // "Failure [only root can delete system app for a particular user]" on the wire, but the
+        // UI only ever showed "Command failed" — indistinguishable from a real bug in this app,
+        // instead of the real, expected-on-this-device reason.
+        val transport = FakeAdbTransport(
+            scriptedOutput = "Failure [only root can delete system app for a particular user]\n",
+            exitCode = 1,
+        )
+        val vm = AppsViewModel(client(transport), scope = this)
+
+        vm.uninstall(com.rel.adbhelper.core.apps.AppEntry(pkg = "com.google.android.youtube", isSystem = true, isEnabled = true))
+        advanceUntilIdle()
+
+        assertTrue(
+            vm.state.value.message.contains("only root can delete system app"),
+            "expected the real failure reason in the message, got '${vm.state.value.message}'",
+        )
+    }
 }

@@ -231,7 +231,7 @@ class AdbClient(
                 val exitCode = match.groupValues[1].toInt()
                 val output = text.substring(0, match.range.first)
                 return if (exitCode == 0) AdbResult.Success(output) else AdbResult.CommandFailed(
-                    "command exited with code $exitCode"
+                    output.trim().ifEmpty { "command exited with code $exitCode" }
                 )
             }
         } finally {
