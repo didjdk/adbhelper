@@ -80,8 +80,20 @@ fun AppsScreen(modifier: Modifier = Modifier) {
             Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp))
         }
         if (state.loading) Text("Loading…")
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            items(viewModel.visibleApps(), key = { it.pkg }) { entry ->
+        // Filtered from `state` (the collectAsState snapshot) rather than calling back into
+        // viewModel.visibleApps(), which reads _state.value directly. That read isn't observed
+        // by Compose's snapshot system, so the Compose compiler's lambda-skipping optimization
+        // saw this content lambda as capturing nothing but the stable `viewModel` reference and
+        // skipped recomposing it on every state change after the first — live-reproduced: the
+        // list rendered empty forever even after diagnostics proved the ViewModel's state held
+        // the correct, fully-loaded app list.
+        val visibleApps = when (state.filter) {
+            AppsViewModel.Filter.ALL -> state.apps
+            AppsViewModel.Filter.THIRD_PARTY -> state.apps.filter { !it.isSystem }
+            AppsViewModel.Filter.SYSTEM -> state.apps.filter { it.isSystem }
+        }
+        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            items(visibleApps, key = { it.pkg }) { entry ->
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,

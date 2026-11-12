@@ -27,6 +27,23 @@ class AdbClientTest {
     }
 
     @Test
+    fun `shell returns as soon as the exit marker is seen, without waiting for stream EOF`() = runTest {
+        // Live-reproduced, decompiled-bytecode-confirmed bug in the underlying ADB protocol
+        // library (io.github.muntashirakon:libadb-android 3.1.1): AdbStream.read() can hang
+        // forever instead of ever returning EOF, when the remote CLSE packet arrives while data
+        // is still queued — the final queued chunk gets drained through a fast path that never
+        // promotes the stream to a real "closed" state, so a later read() call blocks on a wait()
+        // nothing will ever wake. Depending on readAll() (which needs a real EOF) to know a
+        // one-shot shell command is done is therefore unsafe — every call we already embed our
+        // own exit marker specifically so we don't have to trust the stream's own completion
+        // signal at all.
+        val transport = FakeAdbTransport(scriptedOutput = "hello\n", exitCode = 0, chunkSize = 4, neverSignalsEof = true)
+        val result = AdbClient(transport, commandTimeoutMillis = 300, watchdogDispatcher = Dispatchers.Unconfined)
+            .shell("echo hello")
+        assertEquals(AdbResult.Success("hello\n"), result)
+    }
+
+    @Test
     fun `shell returns CommandFailed when the remote command exits non-zero`() = runTest {
         val transport = FakeAdbTransport(scriptedOutput = "", exitCode = 1)
         val result = client(transport).shell("false")
@@ -79,6 +96,24 @@ class AdbClientTest {
             threwIOException = true
         }
         assertTrue(threwIOException)
+    }
+
+    @Test
+    fun `raw treats the library's own Stream-closed exception as a normal EOF, not a failure`() = runTest {
+        // The other half of the same confirmed library bug runShell's exit-marker fix works
+        // around: when CLSE arrives on an already-empty read queue, AdbStream.read throws
+        // IOException("Stream closed.") instead of returning -1 — live-reproduced against a real
+        // target capturing a screenshot. raw() has no embedded completion marker of its own
+        // (binary data), so it can't sidestep the library's signal the way shell() does; it must
+        // instead recognize this exact, confirmed-benign exception as "done", not propagate it.
+        val payload = byteArrayOf(0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte())
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:screencap -p" to payload),
+            chunkSize = 2,
+            throwsStreamClosedAtEof = true,
+        )
+        val bytes = client(transport).raw("exec:screencap -p")
+        assertTrue(payload.contentEquals(bytes))
     }
 
     @Test
@@ -146,7 +181,11 @@ class AdbClientTest {
                             latch.await() // blocks the real thread; only close() below releases it
                             ByteArray(0)
                         }
-                    override suspend fun readChunk(): ByteArray? = null
+                    override suspend fun readChunk(): ByteArray? =
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            latch.await() // blocks the real thread; only close() below releases it
+                            null
+                        }
                     override fun close() {
                         closeCalled = true
                         latch.countDown()
@@ -195,7 +234,11 @@ class AdbClientTest {
                             latch.await()
                             ByteArray(0)
                         }
-                    override suspend fun readChunk(): ByteArray? = null
+                    override suspend fun readChunk(): ByteArray? =
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            latch.await()
+                            null
+                        }
                     override fun close() {
                         closeCalled = true
                         latch.countDown()

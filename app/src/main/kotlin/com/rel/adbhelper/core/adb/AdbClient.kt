@@ -105,11 +105,30 @@ class AdbClient(
      * [COMMAND_TIMEOUT_MILLIS]'s doc. */
     suspend fun openService(service: String): AdbStream = transport.open(service)
 
-    /** Reads a raw service's full byte output — no shell exit-marker framing. */
+    /**
+     * Reads a raw service's full byte output — no shell exit-marker framing. Reads chunk-by-chunk
+     * rather than via [AdbStream.readAll] so a confirmed library bug (see [runShell]'s doc) has
+     * only one failure mode left to handle here: when the remote CLSE packet races an already
+     * drained read queue, [AdbStream.read] throws `IOException("Stream closed.")` instead of
+     * signaling EOF the normal way — live-reproduced capturing a screenshot. Unlike [runShell],
+     * this has no embedded completion marker to fall back on (binary data), so that exact,
+     * confirmed-benign exception is treated as a normal end of stream instead of a failure.
+     */
     suspend fun raw(service: String): ByteArray = try {
         val stream = openWithTimeout(service)
         try {
-            stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) { readAll() }
+            val buffer = java.io.ByteArrayOutputStream()
+            while (true) {
+                val chunk = try {
+                    stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
+                        readChunk()
+                    }
+                } catch (e: IOException) {
+                    if (e.message == "Stream closed.") null else throw e
+                } ?: break
+                buffer.write(chunk)
+            }
+            buffer.toByteArray()
         } finally {
             stream.close()
         }
@@ -187,20 +206,34 @@ class AdbClient(
         throw IOException("timed out opening $service", c)
     }
 
+    /**
+     * Reads chunk-by-chunk, stopping as soon as the embedded exit marker is seen in the
+     * accumulated output, rather than waiting for [AdbStream.readAll]'s EOF. Live-reproduced,
+     * decompiled-bytecode-confirmed bug in the underlying ADB protocol library
+     * (`io.github.muntashirakon:libadb-android` 3.1.1): when the remote CLSE packet races the
+     * last queued WRTE, [AdbStream.read] can block forever instead of ever signaling EOF — the
+     * exact "Stream closed" / "timed out opening ..." failures this app kept hitting against
+     * real targets. The exit marker this app already appends to every command is a
+     * protocol-independent completion signal; trusting it instead of the stream's own (unreliable)
+     * end-of-stream notification sidesteps the library bug entirely for every one-shot command.
+     */
     private suspend fun runShell(command: String): AdbResult {
         val stream = openWithTimeout("shell:$command; echo $EXIT_CODE_MARKER\$?")
         try {
-            val text = String(
-                stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) { readAll() },
-                Charsets.UTF_8,
-            )
-            val match = EXIT_CODE_LINE.find(text)
-                ?: return AdbResult.CommandFailed("remote shell closed without an exit status")
-            val exitCode = match.groupValues[1].toInt()
-            val output = text.substring(0, match.range.first)
-            return if (exitCode == 0) AdbResult.Success(output) else AdbResult.CommandFailed(
-                "command exited with code $exitCode"
-            )
+            val buffer = java.io.ByteArrayOutputStream()
+            while (true) {
+                val chunk = stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
+                    readChunk()
+                } ?: return AdbResult.CommandFailed("remote shell closed without an exit status")
+                buffer.write(chunk)
+                val text = buffer.toString(Charsets.UTF_8.name())
+                val match = EXIT_CODE_LINE.find(text) ?: continue
+                val exitCode = match.groupValues[1].toInt()
+                val output = text.substring(0, match.range.first)
+                return if (exitCode == 0) AdbResult.Success(output) else AdbResult.CommandFailed(
+                    "command exited with code $exitCode"
+                )
+            }
         } finally {
             stream.close()
         }

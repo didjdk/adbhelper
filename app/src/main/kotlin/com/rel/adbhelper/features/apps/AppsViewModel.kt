@@ -63,12 +63,6 @@ class AppsViewModel(
         _state.value = _state.value.copy(filter = filter)
     }
 
-    fun visibleApps(): List<AppEntry> = when (_state.value.filter) {
-        Filter.ALL -> _state.value.apps
-        Filter.THIRD_PARTY -> _state.value.apps.filter { !it.isSystem }
-        Filter.SYSTEM -> _state.value.apps.filter { it.isSystem }
-    }
-
     fun details(entry: AppEntry) {
         scope.launch {
             try {
