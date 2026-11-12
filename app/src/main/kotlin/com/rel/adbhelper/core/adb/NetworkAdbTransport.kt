@@ -45,9 +45,22 @@ private class LibraryAdbStream(private val delegate: io.github.muntashirakon.adb
     }
 
     override suspend fun readChunk(): ByteArray? = withContext(Dispatchers.IO) {
-        val buffer = ByteArray(4096)
+        val buffer = ByteArray(READ_CHUNK_SIZE)
         val read = input.read(buffer)
         if (read <= 0) null else buffer.copyOf(read)
+    }
+
+    private companion object {
+        /**
+         * Live-reproduced on the Live Screen tab: at the old 4096-byte size, a single ~1.3MB
+         * screenshot took ~340 round trips to read, each one a full coroutine dispatch plus an
+         * ADB protocol round trip (WRTE/OKAY) — not just slow in aggregate (~1.3s/frame baseline)
+         * but prone to the occasional read among those hundreds stalling for several seconds,
+         * which read as the whole feature having silently stopped. Raised to 64KiB, closer to
+         * what a plain `adb pull` of a similar-sized file uses internally, cutting a 1.3MB image
+         * to roughly 20 round trips instead of ~340.
+         */
+        const val READ_CHUNK_SIZE = 64 * 1024
     }
 
     override fun close() = delegate.close()

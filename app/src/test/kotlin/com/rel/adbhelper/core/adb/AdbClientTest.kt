@@ -133,6 +133,43 @@ class AdbClientTest {
     }
 
     @Test
+    fun `raw's per-chunk watchdog uses its own short bound, not the full command timeout`() {
+        // Live-reproduced on the Live Screen tab: the OTHER half of the confirmed library bug
+        // (see raw's doc) — a read that blocks forever instead of signaling EOF because CLSE
+        // raced a still-queued read — hit on roughly 1 in every 10-15 screenshot captures. At
+        // commandTimeoutMillis (15s), every one of those silently cost a full 15-second stall
+        // right at the final chunk, each one looking like the whole feature had frozen. raw()
+        // must use its own, far shorter rawChunkTimeoutMillis for this watchdog instead.
+        //
+        // Deliberately plain runBlocking, not runTest — same reasoning as
+        // ShellViewModelTest's identical choice: the watchdog here runs on a real
+        // Dispatchers.Unconfined-driven delay() racing a real CountDownLatch-blocked thread
+        // (see FakeAdbTransport's neverSignalsEof doc), neither of which is visible to
+        // runTest's virtual TestCoroutineScheduler — confirmed empirically: testScheduler
+        // .currentTime stayed 0 across the whole call when this test used runTest. A real
+        // wall-clock bound is the only thing that actually observes which timeout fired.
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:screencap -p" to byteArrayOf(1, 2, 3)),
+            neverSignalsEof = true,
+        )
+        val client = AdbClient(
+            transport,
+            commandTimeoutMillis = 5_000L,
+            watchdogDispatcher = Dispatchers.Unconfined,
+            rawChunkTimeoutMillis = 300L,
+        )
+
+        val elapsedMillis = kotlin.system.measureTimeMillis {
+            kotlinx.coroutines.runBlocking { client.raw("exec:screencap -p") }
+        }
+
+        assertTrue(
+            elapsedMillis < 2_000,
+            "expected the hang to be force-closed after rawChunkTimeoutMillis (300ms), not commandTimeoutMillis (5000ms) — took ${elapsedMillis}ms",
+        )
+    }
+
+    @Test
     fun `raw returns the stream bytes verbatim without any exit-marker framing`() = runTest {
         val payload = byteArrayOf(0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte(), 0x00.toByte(), 0x0A.toByte())
         val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:screencap -p" to payload))

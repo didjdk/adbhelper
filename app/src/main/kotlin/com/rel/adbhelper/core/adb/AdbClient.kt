@@ -35,6 +35,22 @@ private val EXIT_CODE_LINE = Regex("$EXIT_CODE_MARKER(\\d+)\\s*\$")
 const val COMMAND_TIMEOUT_MILLIS = 15_000L
 
 /**
+ * Per-chunk watchdog bound for [AdbClient.raw] specifically — far shorter than
+ * [COMMAND_TIMEOUT_MILLIS]. Live-reproduced on the Live Screen tab: the confirmed
+ * `libadb-android` CLSE-races-WRTE bug (see [AdbClient.raw]'s doc) doesn't only hit the rare
+ * "stream closed on an already-empty queue, throws immediately" case — the far more common case
+ * at the natural end of a one-shot binary read is "queue non-empty when CLSE arrives, next read
+ * blocks forever" (the other half of the same bug), which needs this watchdog to force it closed
+ * before [AdbClient.raw] can treat it as EOF at all. At [COMMAND_TIMEOUT_MILLIS], that meant
+ * *every* screenshot capture risked silently paying a full 15-second stall right at its last
+ * chunk — measured live, happening roughly once every 10-15 captures, each one looking like the
+ * whole feature had frozen. A one-shot binary read has no shell exit code to legitimately wait
+ * 15s for; 2s is already generous for a single already-buffered-locally chunk once the rest of a
+ * same-sized capture has consistently finished in a second or two.
+ */
+const val RAW_CHUNK_TIMEOUT_MILLIS = 2_000L
+
+/**
  * The library's stream reads/writes are raw blocking socket I/O with no timeout of their own —
  * there is no suspension point inside them for coroutine cancellation to land on, so a plain
  * `withTimeout` wrapped around a call to [AdbStream.readAll]/[AdbStream.readChunk]/[AdbStream.write]
@@ -90,6 +106,9 @@ class AdbClient(
     private val commandTimeoutMillis: Long = COMMAND_TIMEOUT_MILLIS,
     /** Exposed for tests only — see [timingOutOnClose]'s doc on why production never overrides this. */
     private val watchdogDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    /** Exposed for tests only — see [raw]'s doc on why this is its own, much shorter, value than
+     * [commandTimeoutMillis]. */
+    private val rawChunkTimeoutMillis: Long = RAW_CHUNK_TIMEOUT_MILLIS,
 ) {
 
     suspend fun shell(command: String): AdbResult = try {
@@ -108,11 +127,14 @@ class AdbClient(
     /**
      * Reads a raw service's full byte output — no shell exit-marker framing. Reads chunk-by-chunk
      * rather than via [AdbStream.readAll] so a confirmed library bug (see [runShell]'s doc) has
-     * only one failure mode left to handle here: when the remote CLSE packet races an already
-     * drained read queue, [AdbStream.read] throws `IOException("Stream closed.")` instead of
-     * signaling EOF the normal way — live-reproduced capturing a screenshot. Unlike [runShell],
-     * this has no embedded completion marker to fall back on (binary data), so that exact,
-     * confirmed-benign exception is treated as a normal end of stream instead of a failure.
+     * only two failure modes left to handle here, both live-reproduced capturing screenshots on
+     * the Live Screen tab: when the remote CLSE packet races an already-drained read queue,
+     * [AdbStream.read] throws `IOException("Stream closed.")` instead of signaling EOF the normal
+     * way; when CLSE instead races a still-queued read, the next read blocks forever, needing
+     * [RAW_CHUNK_TIMEOUT_MILLIS]'s watchdog to force it closed — which throws that exact same
+     * message. Unlike [runShell], this has no embedded completion marker to fall back on (binary
+     * data), so that exact, confirmed-benign exception is treated as a normal end of stream
+     * instead of a failure, from either path.
      */
     suspend fun raw(service: String): ByteArray = try {
         val stream = openWithTimeout(service)
@@ -120,7 +142,7 @@ class AdbClient(
             val buffer = java.io.ByteArrayOutputStream()
             while (true) {
                 val chunk = try {
-                    stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
+                    stream.timingOutOnClose(rawChunkTimeoutMillis, watchdogDispatcher, transport::invalidate) {
                         readChunk()
                     }
                 } catch (e: IOException) {
