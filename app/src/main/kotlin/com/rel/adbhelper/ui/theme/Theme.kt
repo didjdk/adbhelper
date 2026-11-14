@@ -1,6 +1,5 @@
 package com.rel.adbhelper.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -66,8 +65,14 @@ private val AppTypography = Typography().let { base ->
     )
 }
 
+/**
+ * Always dark by default, regardless of the system theme: the dark-indigo "oscilloscope at
+ * rest" look above is this app's actual visual identity (the light scheme just mirrors the same
+ * roles), not a night-mode variant — following [isSystemInDarkTheme] here showed the app in its
+ * light scheme on a light-mode device/emulator, not the identity it was designed around.
+ */
 @Composable
-fun AdbHelperTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+fun AdbHelperTheme(darkTheme: Boolean = true, content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = AppTypography,
