@@ -73,7 +73,10 @@ fun FilesScreen(modifier: Modifier = Modifier) {
                 Switch(checked = state.showHidden, onCheckedChange = { viewModel.toggleHidden() })
             }
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             TextButton(onClick = { dialog = FilesDialog.CreateFolder }) { Text("New folder") }
             TextButton(onClick = { dialog = FilesDialog.CreateFile }) { Text("New file") }
             TextButton(onClick = {

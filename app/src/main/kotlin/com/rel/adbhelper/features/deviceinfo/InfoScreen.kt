@@ -79,8 +79,16 @@ fun InfoScreen(modifier: Modifier = Modifier) {
         }
         items(state.info?.rows ?: emptyList()) { (label, value) ->
             Row(modifier = Modifier.fillMaxWidth()) {
-                Text(label, modifier = Modifier.fillMaxWidth(0.35f), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(value, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace))
+                Text(
+                    label,
+                    modifier = Modifier.fillMaxWidth(0.35f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    value,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }

@@ -2,6 +2,7 @@ package com.rel.adbhelper.features.apps
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -53,7 +55,10 @@ fun AppsScreen(modifier: Modifier = Modifier) {
     }
 
     Column(modifier = modifier.fillMaxSize().padding(horizontal = 24.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()),
+        ) {
             FilterChip(
                 selected = state.filter == AppsViewModel.Filter.ALL,
                 onClick = { viewModel.setFilter(AppsViewModel.Filter.ALL) },

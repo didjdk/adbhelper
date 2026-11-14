@@ -1,11 +1,13 @@
 package com.rel.adbhelper.connect
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -71,6 +73,7 @@ fun ConnectScreen(
     var scanning by remember { mutableStateOf(false) }
     var scanResults by remember { mutableStateOf<List<String>?>(null) }
     var pairDialog by remember { mutableStateOf(false) }
+    var usbDialog by remember { mutableStateOf(false) }
 
     // The device hub owns the connected target from here on; detach on leaving it is
     // handled inside DeviceScreen's lifecycle (DisposableEffect) rather than here.
@@ -133,7 +136,8 @@ fun ConnectScreen(
         )
 
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             TextButton(onClick = {
@@ -152,6 +156,7 @@ fun ConnectScreen(
                 }
             }) { Text("Scan") }
             TextButton(onClick = { pairDialog = true }) { Text("Pair") }
+            TextButton(onClick = { usbDialog = true }) { Text("USB-OTG") }
         }
 
         val scan = scanResults
@@ -213,6 +218,32 @@ fun ConnectScreen(
     if (pairDialog) {
         PairDialog(onDismiss = { pairDialog = false })
     }
+    if (usbDialog) {
+        UsbNotImplementedDialog(onDismiss = { usbDialog = false })
+    }
+}
+
+/**
+ * USB-OTG has no ADB transport behind it yet: `libadb-android` 3.1.1 (the only version
+ * published) only implements the network/TLS transport, and a USB ADB client means hand-rolling
+ * the AUTH/CNXN/OPEN/WRTE/CLSE wire protocol over raw `UsbManager`/`UsbDeviceConnection` bulk
+ * transfer — out of scope for this pass (user decision: stub this visibly rather than build it
+ * or hide it). This dialog is that stub, so the USB-OTG entry point is honest about its state
+ * instead of silently missing from the UI.
+ */
+@Composable
+private fun UsbNotImplementedDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("USB-OTG") },
+        text = {
+            Text(
+                "USB-OTG connections aren't implemented yet. Connect over Wi-Fi/network instead, " +
+                    "using the address field, Scan, or Pair above.",
+            )
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
 }
 
 @Composable

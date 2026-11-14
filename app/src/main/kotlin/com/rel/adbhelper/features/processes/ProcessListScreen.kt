@@ -46,8 +46,13 @@ fun ProcessListScreen(modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Column {
-                        Text(entry.name, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            entry.name,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
                         Text(
                             "pid ${entry.pid} · ${entry.user}",
                             style = MaterialTheme.typography.bodySmall,

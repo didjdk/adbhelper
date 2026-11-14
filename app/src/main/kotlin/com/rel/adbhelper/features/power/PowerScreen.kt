@@ -1,11 +1,13 @@
 package com.rel.adbhelper.features.power
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -40,7 +42,10 @@ fun PowerScreen(modifier: Modifier = Modifier) {
         }
 
         Text("Advanced reboot", style = MaterialTheme.typography.titleLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+        ) {
             Button(onClick = { confirm = "Reboot the device now?" to { viewModel.reboot() } }) { Text("Reboot") }
             Button(onClick = { confirm = "Reboot to recovery?" to { viewModel.rebootRecovery() } }) { Text("Recovery") }
             Button(onClick = { confirm = "Reboot to bootloader?" to { viewModel.rebootBootloader() } }) { Text("Bootloader") }
