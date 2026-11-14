@@ -13,20 +13,22 @@ modules with short functions and meaningful names — built only from the releas
 (`adbhelper_v1.3.1.apk`, kept in this repo as the feature reference) and genuine, well-known
 upstream libraries/binaries, never from the original project's own source tree.
 
-## Status
+## Documentation
 
-In progress. See:
-- [Design doc](docs/superpowers/specs/2026-11-11-adbhelper-rewrite-design.md) — full feature
-  spec, architecture decisions, and constraints.
-- [Implementation plans](docs/superpowers/plans/) — task-by-task build plans, executed and
-  reviewed one at a time.
+Full docs — features, architecture, build instructions, and known gaps (USB-OTG, screen
+mirroring) — live under [`docs/`](docs/index.md), built with
+[Material for MkDocs](https://squidfunk.github.io/mkdocs-material/):
+
+```bash
+pip install mkdocs-material
+mkdocs serve
+```
 
 ## Requirements
 
 - Android Studio / JDK 17+, Android SDK (minSdk 26).
-- An adb-connected device or emulator for local testing of UI/non-transport flows. Full
-  USB-OTG/network-target behavior is inherently hard to verify without a second physical
-  Android device — see the design doc's testing notes.
+- A target device or emulator reachable over the network for local testing. USB-OTG isn't
+  implemented yet — see [Known limitations](docs/known-limitations.md).
 
 ## License
 
